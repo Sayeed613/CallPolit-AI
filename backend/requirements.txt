@@ -1,0 +1,14 @@
+apscheduler
+fastapi
+google-generativeai
+groq
+httpx
+openpyxl
+pandas
+pypdf
+python-dotenv
+python-multipart
+requests
+supabase
+twilio
+uvicorn
