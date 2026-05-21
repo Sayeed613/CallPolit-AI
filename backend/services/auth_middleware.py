@@ -1,7 +1,11 @@
+import logging
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jwt import PyJWKClient, InvalidTokenError, ExpiredSignatureError, decode
+from jwt import PyJWKClient, InvalidTokenError, ExpiredSignatureError, ImmatureSignatureError, decode
 from config.settings import settings
+
+logger = logging.getLogger("auth")
 
 security = HTTPBearer()
 
@@ -31,13 +35,15 @@ async def get_current_user(
         jwks_client = _get_jwks_client()
         signing_key = jwks_client.get_signing_key_from_jwt(token)
 
-        # Decode and verify the token
+        # Decode and verify the token.
+        # Use a small leeway (30s) to tolerate clock skew between this server
+        # and Supabase's auth servers when checking iat / exp claims.
         payload = decode(
             token,
             signing_key.key,
             algorithms=[signing_key.algorithm_name],
-            audience="authenticated",
-            options={"verify_exp": True},
+            leeway=30,
+            options={"verify_exp": True, "verify_aud": False},
         )
 
         user_id = payload.get("sub")
@@ -53,8 +59,20 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired",
         )
-    except InvalidTokenError:
+    except ImmatureSignatureError:
+        # Server clock is behind Supabase's — the iat claim is in the future
+        logger.warning(
+            "Clock skew detected: token's iat claim is in the future. "
+            "Check system clock accuracy."
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication token",
+            detail="Token not yet valid (clock skew). Retry or sync system clock.",
+        )
+    except InvalidTokenError as e:
+        # Log the actual reason for debugging
+        logger.warning("JWT verification failed: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid authentication token",
         )

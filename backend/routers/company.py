@@ -52,6 +52,15 @@ def create_company(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/list")
+def list_companies(
+    user_id: str = Depends(get_current_user),
+):
+    """List all companies for the authenticated user."""
+    result = supabase.table("companies").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
+    return {"success": True, "companies": result.data}
+
+
 @router.get("/get/{company_id}")
 def get_company_details(
     company_id: str,

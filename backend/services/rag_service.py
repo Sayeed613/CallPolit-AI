@@ -40,11 +40,14 @@ def detect_escalation(text: str) -> bool:
     """Detect if a customer query should be escalated to a human.
 
     Returns True if escalation keywords are found.
+    NOTE: "agent" is intentionally excluded because the AI calls
+    itself "a calling agent" in its greeting, causing false positives.
     """
     triggers = [
         "manager", "complaint", "angry", "not helping",
-        "speak to human", "talk to a person", "agent",
+        "speak to human", "talk to a person",
         "supervisor", "escalate", "frustrated",
+        "mujhe kisi aur se baat", "kisi aur se karo",  # Hindi: talk to someone else
     ]
     lower = text.lower()
     return any(trigger in lower for trigger in triggers)
