@@ -10,7 +10,7 @@ class CreateCompanyRequest(BaseModel):
     name: str           # Company name
     industry: str = ""  # Optional
     mode: str           # "inbound" | "outbound" | "both"
-    plan: str           # same as mode for now
+    plan: str = ""      # same as mode; defaults to ``mode`` if empty
 
 
 @router.post("/create")
@@ -26,7 +26,8 @@ def create_company(
             status_code=400,
             detail=f"mode must be one of: {valid_modes}"
         )
-    if req.plan not in valid_modes:
+    plan = req.plan if req.plan else req.mode
+    if plan not in valid_modes:
         raise HTTPException(
             status_code=400,
             detail=f"plan must be one of: {valid_modes}"
@@ -38,7 +39,7 @@ def create_company(
             "name": req.name,
             "industry": req.industry,
             "mode": req.mode,
-            "plan": req.plan,
+            "plan": plan,
         }).execute()
         company = result.data[0]
         return {

@@ -2,21 +2,237 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply font-sans text-white bg-surface;
+    min-height: 100vh;
+  }
+
+  * {
+    @apply border-surface-border;
+  }
+
+  ::selection {
+    @apply bg-brand-500/30 text-white;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-surface-border rounded-full hover:bg-white/20 transition-colors;
+  }
 }
 
 @layer components {
+  /* ─── Buttons ──────────────────────────────────────────── */
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5
+      font-medium text-sm rounded-button
+      transition-all duration-200
+      focus:outline-none focus:ring-2 focus:ring-brand-500/50
+      disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
   .btn-primary {
-    @apply bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply btn bg-brand-500 text-white
+      hover:bg-brand-600
+      active:bg-brand-700
+      shadow-lg shadow-brand-500/20
+      hover:shadow-brand-500/30
+      hover:scale-[1.02];
   }
+
   .btn-secondary {
-    @apply bg-white hover:bg-gray-50 text-gray-700 font-medium py-2 px-4 rounded-lg border border-gray-300 transition-colors duration-150;
+    @apply btn bg-surface-card text-white border border-surface-border
+      hover:bg-surface-hover hover:border-brand-500/30
+      active:bg-surface-card;
   }
-  .input-field {
-    @apply w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent;
+
+  .btn-ghost {
+    @apply btn text-zinc-400
+      hover:text-white hover:bg-surface-card
+      active:bg-surface-hover;
   }
+
+  .btn-danger {
+    @apply btn bg-error text-white
+      hover:bg-error-dark
+      active:bg-error
+      shadow-lg shadow-error/20;
+  }
+
+  .btn-success {
+    @apply btn bg-success text-white
+      hover:bg-success-dark
+      active:bg-success
+      shadow-lg shadow-success/20;
+  }
+
+  .btn-sm {
+    @apply px-3 py-1.5 text-xs;
+  }
+
+  .btn-lg {
+    @apply px-6 py-3 text-base;
+  }
+
+  .btn-icon {
+    @apply p-2 rounded-lg;
+  }
+
+  /* ─── Inputs ────────────────────────────────────────────── */
+
+  .input {
+    @apply w-full px-4 py-2.5
+      bg-surface-card border border-surface-border
+      text-white placeholder-zinc-500
+      rounded-button
+      transition-all duration-200
+      focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500/50
+      disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .input-error {
+    @apply border-error/50 focus:ring-error/30 focus:border-error;
+  }
+
+  .input-sm {
+    @apply px-3 py-1.5 text-sm;
+  }
+
+  .input-lg {
+    @apply px-4 py-3 text-base;
+  }
+
+  /* ─── Cards ─────────────────────────────────────────────── */
+
   .card {
-    @apply bg-white rounded-xl shadow-sm border border-gray-200 p-6;
+    @apply bg-surface-card border border-surface-border rounded-card p-5
+      shadow-card
+      transition-all duration-200;
+  }
+
+  .card-hover {
+    @apply card
+      hover:shadow-card-hover hover:border-brand-500/20
+      hover:-translate-y-0.5;
+  }
+
+  .card-glass {
+    @apply bg-surface-card/60 backdrop-blur-xl border border-white/[0.06] rounded-card;
+  }
+
+  .card-highlight {
+    @apply card border-brand-500/20 shadow-glow-indigo;
+  }
+
+  /* ─── Badges ────────────────────────────────────────────── */
+
+  .badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-0.5
+      text-xs font-medium rounded-full;
+  }
+
+  .badge-success {
+    @apply badge bg-success/10 text-success-light border border-success/20;
+  }
+
+  .badge-warning {
+    @apply badge bg-warning/10 text-warning-light border border-warning/20;
+  }
+
+  .badge-error {
+    @apply badge bg-error/10 text-error-light border border-error/20;
+  }
+
+  .badge-info {
+    @apply badge bg-brand-500/10 text-brand-300 border border-brand-500/20;
+  }
+
+  .badge-neutral {
+    @apply badge bg-zinc-500/10 text-zinc-400 border border-zinc-500/20;
+  }
+
+  /* ─── Text ──────────────────────────────────────────────── */
+
+  .gradient-text {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-brand-400 to-accent-400;
+  }
+
+  .gradient-text-indigo {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-brand-300 via-brand-400 to-brand-500;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* ─── Skeleton ──────────────────────────────────────────── */
+
+  .skeleton {
+    @apply rounded-lg;
+    background: linear-gradient(
+      90deg,
+      #1a1a1a 0%,
+      #222222 40%,
+      #1a1a1a 80%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 2s infinite linear;
+  }
+
+  /* ─── Glass morphism ────────────────────────────────────── */
+
+  .glass {
+    @apply bg-white/[0.03] backdrop-blur-xl border border-white/[0.06] rounded-card;
+  }
+
+  .glass-strong {
+    @apply bg-white/[0.06] backdrop-blur-xl border border-white/[0.08] rounded-card;
+  }
+
+  /* ─── Dividers ──────────────────────────────────────────── */
+
+  .divider {
+    @apply w-full h-px bg-gradient-to-r from-transparent via-surface-border to-transparent;
+  }
+
+  .divider-solid {
+    @apply w-full h-px bg-surface-border;
+  }
+}
+
+@layer utilities {
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  .text-muted {
+    @apply text-zinc-400;
+  }
+
+  .text-dim {
+    @apply text-zinc-500;
   }
 }

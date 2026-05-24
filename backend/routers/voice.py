@@ -25,7 +25,8 @@ from services.supabase_client import (
     mark_call_log_callback,
     create_appointment,
 )
-from services.groq_service import generate_response, get_embedding
+from services.gemini_service import generate_response, get_embedding
+from services.verification_service import VerificationService
 from services.rag_service import build_rag_context, detect_escalation
 from config.settings import settings
 
@@ -184,6 +185,7 @@ def _detect_language(text: str) -> str:
     """Detect the language of the customer's speech.
 
     Keywords-based detection for common Indian languages.
+    Supports: Hindi, Kannada, English.
     Falls back to 'hi-IN' (Hindi).
     """
     text_lower = text.lower().strip()
@@ -197,15 +199,22 @@ def _detect_language(text: str) -> str:
         "nahi", "haan", "theek", "accha", "chahiye", "sakta",
         "sakte", "karo", "karna", "jaana", "aana", "dena", "lena",
     ]
-    # Gujarati indicators
-    gujarati_indicators = [
-        "chhe", "chhu", "chho", "nyo", "nyi", "kyare", "kya",
-        "mare", "tame", "aapne", "nahi", "haan", "sarasa",
-    ]
-    # Tamil indicators
-    tamil_indicators = [
-        "illa", "irukku", "mudiyum", "venum", "enga", "eppadi",
-        "naan", "nee", "ungal", "enna", "yaar", "epdi",
+    # Kannada indicators
+    kannada_indicators = [
+        "alli", "illa", "ide", "iru", "beku", "beda",
+        "yenu", "yaake", "hege", "yelli", "naanu", "neevu",
+        "avaru", "idu", "adhu", "nimma", "namma", "hogbeku",
+        "barbeku", "madtini", "madbeku", "gotilla", "gottide",
+        "namaskara", "hegidira", "chennagidini", "thilidira",
+        "barutte", "hogutte", "madutta", "kelsa", "matha",
+        "tamma", "akka", "anna", "bhaya", "sari",
+        "banni", "kodi", "thago", "nodi", "kelu", "heLu",
+        "ellya", "ootha", "neeru", "ella", "ellaaru",
+        "hesaru", "ooru", "mane", "kade", "munde",
+        "hinde", "mele", "kelage", "olage", "horage",
+        "sanna", "dodda", "olleya", "kettadu", "jaasti",
+        "kadime", "sakath", "bhari", "thumba", "swalpa",
+        "hosa", "haleya", "hididu", "bididu",
     ]
     # English indicators
     english_indicators = [
@@ -222,8 +231,7 @@ def _detect_language(text: str) -> str:
 
     scores = {
         "hi-IN": score(hindi_indicators),
-        "gu-IN": score(gujarati_indicators),
-        "ta-IN": score(tamil_indicators),
+        "kn-IN": score(kannada_indicators),
         "en-IN": score(english_indicators),
     }
 
@@ -232,10 +240,10 @@ def _detect_language(text: str) -> str:
     if scores[best] >= 2:
         return best
 
-    # Check for English dominance if few Hindi matches
+    # Check for English dominance (threshold reduced from 0.6 to 0.5 per spec)
     en_words = sum(1 for w in words if w.isascii() and w.isalpha() and len(w) > 2)
     total_words = sum(1 for w in words if w.isalpha())
-    if total_words > 2 and (en_words / total_words) > 0.6:
+    if total_words > 2 and (en_words / total_words) > 0.5:
         return "en-IN"
 
     return "hi-IN"
@@ -302,9 +310,9 @@ async def inbound_call(
     CallStatus: str = Form(default="ringing"),
     company_id: str | None = Query(default=None),
 ):
-    """Twilio outbound call webhook (called when customer answers)."""
+    """Twilio inbound call webhook (called when customer calls in)."""
     try:
-        call_log = create_call_log(None, None, CallSid, status=CallStatus)
+        call_log = create_call_log(None, None, CallSid, status=CallStatus, direction="inbound")
     except Exception:
         pass
 
@@ -316,39 +324,17 @@ async def inbound_call(
     else:
         company_id, company_name = _lookup_company_by_phone(To)
 
-    # Generate outbound greeting from PDF context
-    greeting = None
-    try:
-        generic_embedding = get_embedding("company information and services overview")
-        if company_id:
-            chunks = match_chunks(generic_embedding, company_id, match_count=2)
-            context = build_rag_context(chunks) if chunks else "No information available."
-        else:
-            context = "No information available."
-
-        system_prompt = f"""You are an AI calling agent for {company_name}.
-Generate a greeting for an outbound call (max 3 sentences).
-The purpose of this call is defined by the company document below.
-Sound professional and friendly. Speak in Hindi.
-ONLY use information from the document. Do not add anything else.
-End with a clear prompt inviting the customer to speak.
-
-Company document context:
-{context}"""
-        greeting = generate_response(system_prompt, "Generate the opening greeting for this outbound call.", max_tokens=250)
-    except Exception:
-        pass
-
-    if not greeting:
-        greeting = f"Namaste! Main {company_name} ki or se bol rahi hoon. Aapki kaise madad kar sakti hoon?"
-
-    gather_url = f"{settings.PUBLIC_BASE_URL}/api/voice/handle-speech"
+    # ─── Step 1: Ask for mobile number (verification flow) ────────────
+    # Start by asking the customer for their registered mobile number
+    verify_url = f"{settings.PUBLIC_BASE_URL}/api/voice/verify-step"
     if company_id:
-        gather_url += f"?company_id={company_id}"
+        verify_url += f"?company_id={company_id}"
+
+    greeting = f"Namaste! {company_name} mein aapka swagat hai. Kripya apna mobile number batayein."
 
     twiml_body = (
         f'<Say language="hi-IN">{greeting}</Say>'
-        f'<Gather input="speech" action="{gather_url}" '
+        f'<Gather input="speech" action="{verify_url}" '
         f'speechTimeout="auto" language="hi-IN" timeout="15">'
         f'</Gather>'
     )
@@ -359,19 +345,258 @@ Company document context:
     )
 
 
+@router.post("/verify-step", response_class=Response)
+async def verify_step(
+    CallSid: str = Form(...),
+    SpeechResult: str = Form(default=""),
+    company_id: str | None = Query(default=None),
+    From: str = Form(default=""),
+):
+    """Customer verification step for inbound calls.
+
+    Step 1 — Ask for mobile number, look up contact, determine verification level.
+    Step 2+ — Ask verification questions based on company settings.
+    """
+    if not SpeechResult.strip():
+        gretting_url = f"{settings.PUBLIC_BASE_URL}/api/voice/verify-step"
+        if company_id:
+            gretting_url += f"?company_id={company_id}"
+        twiml_body = (
+            '<Say language="hi-IN">Kripya apna mobile number batayein.</Say>'
+            f'<Gather input="speech" action="{gretting_url}" '
+            f'speechTimeout="auto" language="hi-IN" timeout="15">'
+            f'</Gather>'
+        )
+        return Response(content=_build_twiml(twiml_body), media_type="application/xml")
+
+    if not company_id:
+        company_id, _ = _lookup_company_by_phone(From)
+
+    if not company_id:
+        return Response(
+            content=_build_twiml(
+                '<Say language="hi-IN">Company not found. Namaste.</Say><Hangup/>'
+            ),
+            media_type="application/xml",
+        )
+
+    # Extract 10-digit number from speech
+    import re
+    digits = re.sub(r'\D', '', SpeechResult)
+    phone = digits[-10:] if len(digits) >= 10 else digits
+
+    if len(phone) < 10:
+        retry_url = f"{settings.PUBLIC_BASE_URL}/api/voice/verify-step?company_id={company_id}"
+        twiml_body = (
+            '<Say language="hi-IN">Maaf karein, sahi mobile number nahi mila. Kripya apna 10-digit mobile number dobara batayein.</Say>'
+            f'<Gather input="speech" action="{retry_url}" '
+            f'speechTimeout="auto" language="hi-IN" timeout="15">'
+            f'</Gather>'
+        )
+        return Response(content=_build_twiml(twiml_body), media_type="application/xml")
+
+    # Look up customer profile
+    vs = VerificationService()
+    customer = await vs.get_customer_profile(company_id, phone)
+
+    company = get_company(company_id)
+    verification_level = company.get("verification_level", 1) if company else 1
+    company_name = company.get("name", "CallPilot AI") if company else "CallPilot AI"
+
+    if not customer:
+        # Customer not found — proceed without profile
+        handle_url = f"{settings.PUBLIC_BASE_URL}/api/voice/handle-speech?company_id={company_id}"
+        twiml_body = (
+            f'<Say language="hi-IN">'
+            f'Aapka number hamare system mein nahi mila. Main aapki madad zaroor kar sakti hoon. Bataayein kaise madad kar sakti hoon?'
+            f'</Say>'
+            f'<Gather input="speech" action="{handle_url}" '
+            f'speechTimeout="auto" language="hi-IN" timeout="15">'
+            f'</Gather>'
+        )
+        return Response(content=_build_twiml(twiml_body), media_type="application/xml")
+
+    # Customer found — determine verification questions
+    if verification_level >= 2:
+        # Level 2+: Ask for name confirmation first
+        ask_url = f"{settings.PUBLIC_BASE_URL}/api/voice/verify-name?company_id={company_id}&phone={phone}"
+        twiml_body = (
+            '<Say language="hi-IN">'
+            f'Dhanyavaad! Kya aap {customer.get("name", "")} hain? Kripya haan ya nahi bataayein.'
+            '</Say>'
+            f'<Gather input="speech" action="{ask_url}" '
+            f'speechTimeout="auto" language="hi-IN" timeout="10">'
+            f'</Gather>'
+        )
+    else:
+        # Level 1: Just verify name, then proceed
+        ask_url = f"{settings.PUBLIC_BASE_URL}/api/voice/verify-name?company_id={company_id}&phone={phone}"
+        twiml_body = (
+            '<Say language="hi-IN">'
+            f'Dhanyavaad! Kya aap {customer.get("name", "")} hain? Haan ya nahi bataayein.'
+            '</Say>'
+            f'<Gather input="speech" action="{ask_url}" '
+            f'speechTimeout="auto" language="hi-IN" timeout="10">'
+            f'</Gather>'
+        )
+
+    return Response(content=_build_twiml(twiml_body), media_type="application/xml")
+
+
+@router.post("/verify-name", response_class=Response)
+async def verify_name(
+    CallSid: str = Form(...),
+    SpeechResult: str = Form(default=""),
+    company_id: str = Query(...),
+    phone: str = Query(...),
+):
+    """Verify customer name confirmation. Then proceed based on verification level."""
+    text_lower = SpeechResult.lower().strip()
+    confirmed = any(w in text_lower for w in ["haan", "ha", "yes", "sure", "hmm", "hoon", "hun"])
+    denied = any(w in text_lower for w in ["nahi", "no", "nope", "wrong", "galat"])
+
+    vs = VerificationService()
+    company = get_company(company_id)
+    verification_level = company.get("verification_level", 1) if company else 1
+    company_name = company.get("name", "CallPilot AI") if company else "CallPilot AI"
+
+    if denied:
+        # Wrong person — try to find correct person or escalate
+        handle_url = f"{settings.PUBLIC_BASE_URL}/api/voice/handle-speech?company_id={company_id}"
+        twiml_body = (
+            '<Say language="hi-IN">'
+            'Maaf karein. Main aapko hamari support team se connect kar rahi hoon. Kripya pratiksha karein.'
+            '</Say>'
+        )
+        return Response(content=_build_twiml(twiml_body), media_type="application/xml")
+
+    if not confirmed:
+        # Ask again
+        ask_url = f"{settings.PUBLIC_BASE_URL}/api/voice/verify-name?company_id={company_id}&phone={phone}"
+        twiml_body = (
+            '<Say language="hi-IN">Maaf karein, samajh nahi aaya. Kripya haan ya nahi bataayein.</Say>'
+            f'<Gather input="speech" action="{ask_url}" '
+            f'speechTimeout="auto" language="hi-IN" timeout="10">'
+            f'</Gather>'
+        )
+        return Response(content=_build_twiml(twiml_body), media_type="application/xml")
+
+    # Name confirmed — check if higher verification needed
+    if verification_level >= 2:
+        # Level 2: Ask for OTP verification
+        otp = await vs.send_otp(phone)
+        # Store OTP in session for later verification
+        supabase.table("verification_sessions").insert({
+            "company_id": company_id,
+            "phone": phone,
+            "otp": otp,
+            "otp_expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+            "session_token": "inbound_" + CallSid,
+        }).execute()
+
+        otp_url = f"{settings.PUBLIC_BASE_URL}/api/voice/verify-otp?company_id={company_id}&phone={phone}"
+        twiml_body = (
+            '<Say language="hi-IN">'
+            'Aapke mobile par ek OTP bheja gaya hai. Kripya woh OTP bataayein.'
+            '</Say>'
+            f'<Gather input="speech" action="{otp_url}" '
+            f'speechTimeout="auto" language="hi-IN" timeout="15">'
+            f'</Gather>'
+        )
+        return Response(content=_build_twiml(twiml_body), media_type="application/xml")
+
+    # Level 1: Proceed to handle speech directly
+    handle_url = f"{settings.PUBLIC_BASE_URL}/api/voice/handle-speech?company_id={company_id}"
+    customer_data = await vs.get_customer_profile(company_id, phone)
+    name = customer_data.get("name", "") if customer_data else ""
+    greeting = f"Dhanyavaad {name}! Bataayein, main aapki kaise madad kar sakti hoon?"
+    twiml_body = (
+        f'<Say language="hi-IN">{greeting}</Say>'
+        f'<Gather input="speech" action="{handle_url}" '
+        f'speechTimeout="auto" language="hi-IN" timeout="15">'
+        f'</Gather>'
+    )
+    return Response(content=_build_twiml(twiml_body), media_type="application/xml")
+
+
+@router.post("/verify-otp", response_class=Response)
+async def verify_otp(
+    CallSid: str = Form(...),
+    SpeechResult: str = Form(default=""),
+    company_id: str = Query(...),
+    phone: str = Query(...),
+):
+    """Verify OTP entered by customer."""
+    vs = VerificationService()
+    otp_ok = await vs.verify_otp(phone, SpeechResult.strip())
+
+    if otp_ok:
+        # OTP verified — proceed to main conversation
+        handle_url = f"{settings.PUBLIC_BASE_URL}/api/voice/handle-speech?company_id={company_id}"
+        customer_data = await vs.get_customer_profile(company_id, phone)
+        name = customer_data.get("name", "") if customer_data else ""
+        twiml_body = (
+            f'<Say language="hi-IN">Dhanyavaad {name}! Aapka verification safal raha. Bataayein, main aapki kaise madad kar sakti hoon?</Say>'
+            f'<Gather input="speech" action="{handle_url}" '
+            f'speechTimeout="auto" language="hi-IN" timeout="15">'
+            f'</Gather>'
+        )
+        return Response(content=_build_twiml(twiml_body), media_type="application/xml")
+    else:
+        # OTP failed — check attempts, max 3
+        result = supabase.table("verification_sessions") \
+            .select("attempts") \
+            .eq("phone", phone) \
+            .eq("company_id", company_id) \
+            .order("created_at", desc=True) \
+            .limit(1) \
+            .execute()
+        attempts = 1
+        if result.data and result.data[0].get("attempts"):
+            attempts = result.data[0]["attempts"] + 1
+
+        if attempts >= 3:
+            await vs.lock_customer(company_id, phone)
+            twiml_body = (
+                '<Say language="hi-IN">'
+                'Teen asafal prayas. Main aapko hamari support team se connect kar rahi hoon. Kripya pratiksha karein.'
+                '</Say>'
+            )
+            return Response(content=_build_twiml(twiml_body), media_type="application/xml")
+
+        # Update attempts
+        supabase.table("verification_sessions") \
+            .update({"attempts": attempts}) \
+            .eq("phone", phone) \
+            .eq("company_id", company_id) \
+            .execute()
+
+        otp_url = f"{settings.PUBLIC_BASE_URL}/api/voice/verify-otp?company_id={company_id}&phone={phone}"
+        remaining = 3 - attempts
+        twiml_body = (
+            f'<Say language="hi-IN">Galat OTP. Kripya dobara OTP bataayein. Aapke paas {remaining} aur mauke hain.</Say>'
+            f'<Gather input="speech" action="{otp_url}" '
+            f'speechTimeout="auto" language="hi-IN" timeout="15">'
+            f'</Gather>'
+        )
+        return Response(content=_build_twiml(twiml_body), media_type="application/xml")
+
+
 @router.post("/handle-speech", response_class=Response)
 async def handle_speech(
     CallSid: str = Form(...),
     SpeechResult: str = Form(default=""),
     Confidence: float = Form(default=0.0),
     company_id: str | None = Query(default=None),
+    From: str = Form(default=""),
 ):
     """Handle customer speech input from Twilio Gather.
 
-    New features:
+    Features:
     - Wrong number detection -> mark contact invalid
     - Callback request detection -> schedule follow-up call
     - Smart timing -> store best call time after successful interaction
+    - Full context from customer profile (if verification was done)
     """
     if not SpeechResult.strip():
         gather_url = f"{settings.PUBLIC_BASE_URL}/api/voice/handle-speech"
@@ -461,6 +686,31 @@ async def handle_speech(
             media_type="application/xml",
         )
 
+    # ─── Build customer context from verification if available ────────
+    customer_context = ""
+    if resolved_company_id:
+        # Try to get verified customer profile from speech or call logs
+        try:
+            vs = VerificationService()
+            # Try to find customer by phone if they verified
+            phone_digits = "".join(filter(str.isdigit, From))
+            if len(phone_digits) >= 10:
+                phone = phone_digits[-10:]
+                profile = await vs.get_customer_profile(resolved_company_id, phone)
+                if profile:
+                    customer_context = f"""CUSTOMER PROFILE:
+Name: {profile.get('name', 'N/A')}
+VIP: {'Yes' if profile.get('is_vip') else 'No'}
+Outstanding Dues: ₹{profile.get('outstanding_dues', 0)}
+KYC Status: {profile.get('kyc_status', 'N/A')}
+Customer ID: {profile.get('customer_id', 'N/A')}
+"""
+                    if profile.get('open_tickets'):
+                        tickets = profile.get('open_tickets', [])
+                        customer_context += f"Open Tickets: {len(tickets)}\n"
+        except Exception:
+            pass
+
     # ─── RAG Pipeline ──────────────────────────────────────────────────
     try:
         query_embedding = get_embedding(SpeechResult)
@@ -486,9 +736,11 @@ async def handle_speech(
 Your entire knowledge comes ONLY from the
 company document excerpts provided below.
 
+{customer_context}
+
 STRICT RULES — NEVER BREAK THESE:
 1. LANGUAGE: First detect the customer's language (Hindi, Hinglish,
-   Gujarati, Tamil, or English). Then respond in EXACTLY that language.
+   Kannada, or English). Then respond in EXACTLY that language.
    NEVER switch languages mid-conversation. Match their language precisely.
 2. Answer ONLY using the CONTEXT below. Nothing else.
 3. If the answer is NOT in the context -> say exactly:
@@ -509,6 +761,7 @@ STRICT RULES — NEVER BREAK THESE:
    "Theek hai, aapka samay dene ke liye shukriya. Namaste."
 8. If customer is interested -> say:
    "Bahut accha! Main aapke liye ek team member se callback arrange karta hoon."
+9. VIP customers must be handled with priority.
 
 COMPANY DOCUMENT CONTEXT:
 {rag_context}
@@ -605,8 +858,7 @@ immediately escalate."""
     # Determine the best language code for Twilio's Say verb
     twilio_lang_map = {
         "hi-IN": "hi-IN",
-        "gu-IN": "gu-IN",
-        "ta-IN": "ta-IN",
+        "kn-IN": "kn-IN",
         "en-IN": "en-IN",
     }
     say_language = twilio_lang_map.get(detected_lang, "hi-IN")

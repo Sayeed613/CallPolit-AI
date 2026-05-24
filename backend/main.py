@@ -7,6 +7,8 @@ from routers.campaign import router as campaign_router
 from routers.voice import router as voice_router
 from routers.company import router as company_router
 from routers.appointments import router as appointments_router
+from routers.verification import router as verification_router
+from routers.live import router as live_router
 
 app = FastAPI(
     title="CallPilot AI Backend",
@@ -30,6 +32,8 @@ app.include_router(campaign_router)
 app.include_router(voice_router)
 app.include_router(company_router)
 app.include_router(appointments_router)
+app.include_router(verification_router)
+app.include_router(live_router)
 
 
 @app.get("/")

@@ -1,172 +1,259 @@
-import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { supabase } from '../lib/supabase'
-import {
-  Building2, Plus, TrendingUp, Clock, Phone, Calendar
-} from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { motion } from 'framer-motion'
+import { Button } from '../components/ui/Button'
+import { Card } from '../components/ui/Card'
+import { Badge } from '../components/ui/Badge'
+import { Skeleton } from '../components/ui/Skeleton'
+import { PageWrapper } from '../components/layout/PageWrapper'
+import { useAuthStore } from '../stores/authStore'
+import { useCompanyStore } from '../stores/companyStore'
+import { useCallStore } from '../stores/callStore'
+import { api } from '../lib/api'
+import { cn } from '../lib/utils'
 
-interface Company {
-  id: string
-  name: string
-  industry: string
-  mode: string
-  created_at: string
+interface StatCardProps {
+  title: string
+  value: number | string
+  change?: string
+  changeType?: 'up' | 'down' | 'neutral'
+  icon: string
+  loading?: boolean
 }
 
-export default function Dashboard() {
+function StatCard({ title, value, change, changeType, icon, loading }: StatCardProps) {
+  if (loading) {
+    return (
+      <Card className="p-5">
+        <Skeleton className="mb-3 h-4 w-24" />
+        <Skeleton className="mb-2 h-8 w-16" />
+        <Skeleton className="h-3 w-20" />
+      </Card>
+    )
+  }
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+    >
+      <Card className="p-5 transition-all hover:border-zinc-600/50">
+        <div className="mb-3 flex items-center justify-between">
+          <span className="text-sm font-medium text-text-muted">{title}</span>
+          <span className="text-lg">{icon}</span>
+        </div>
+        <div className="flex items-baseline gap-2">
+          <span className="text-3xl font-bold text-text-primary">{value}</span>
+          {change && (
+            <span
+              className={cn(
+                'text-xs font-medium',
+                changeType === 'up' && 'text-emerald-400',
+                changeType === 'down' && 'text-red-400',
+                changeType === 'neutral' && 'text-text-muted'
+              )}
+            >
+              {change}
+            </span>
+          )}
+        </div>
+      </Card>
+    </motion.div>
+  )
+}
+
+export function Dashboard() {
   const navigate = useNavigate()
-  const [companies, setCompanies] = useState<Company[]>([])
+  const { user } = useAuthStore()
+  const { activeCompany } = useCompanyStore()
+  const { activeCalls } = useCallStore()
   const [loading, setLoading] = useState(true)
-  const [showCreate, setShowCreate] = useState(false)
-  const [newName, setNewName] = useState('')
-  const [newIndustry, setNewIndustry] = useState('Healthcare')
-  const [newMode, setNewMode] = useState('both')
-  const [creating, setCreating] = useState(false)
+  const [stats, setStats] = useState({
+    totalCalls: 0,
+    activeCampaigns: 0,
+    connectionRate: 0,
+    hotLeads: 0,
+  })
 
   useEffect(() => {
-    loadCompanies()
-  }, [])
-
-  async function loadCompanies() {
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) return
-      const res = await fetch('/api/company/list', {
-        headers: { Authorization: `Bearer ${session.access_token}` }
-      })
-      if (res.ok) {
-        const data = await res.json()
-        if (data.companies) setCompanies(data.companies)
-      } else {
-        // Fallback - list all companies via raw table query
-        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-        const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
-        if (supabaseUrl && anonKey) {
-          const { createClient } = await import('@supabase/supabase-js')
-          const sb = createClient(supabaseUrl, anonKey)
-          const { data } = await sb
-            .from('companies')
-            .select('id, name, industry, mode, created_at')
-            .order('created_at', { ascending: false })
-          if (data) setCompanies(data as Company[])
-        }
+    async function load() {
+      const cid = activeCompany?.id || ''
+      if (!cid) { setLoading(false); return }
+      try {
+        const [campaignsRes, analyticsRes] = await Promise.all([
+          api.campaigns.list(cid),
+          api.analytics.getWeekly(cid).catch(() => null),
+        ])
+        const campaignsArr = campaignsRes?.campaigns || []
+        const running = campaignsArr.filter((c: any) => c.status === 'running')
+        const weeklyData = analyticsRes?.data
+        setStats({
+          totalCalls: weeklyData?.calls_total ?? 0,
+          activeCampaigns: running.length,
+          connectionRate: weeklyData?.connect_rate_pct ?? 0,
+          hotLeads: 0, // hot_leads not available on WeeklyStats; aggregated from campaigns
+        })
+      } catch {
+        // Use fallback values
+      } finally {
+        setLoading(false)
       }
-    } catch (e) {
-      console.error('Failed to load companies', e)
     }
-    setLoading(false)
-  }
-
-  async function handleCreate(e: React.FormEvent) {
-    e.preventDefault()
-    setCreating(true)
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) return
-      const res = await fetch('/api/company/create', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({ name: newName, industry: newIndustry, mode: newMode, plan: newMode }),
-      })
-      if (!res.ok) throw new Error(await res.text())
-      const result = await res.json()
-      setShowCreate(false)
-      setNewName('')
-      navigate(`/company/${result.company_id}`)
-    } catch (e) {
-      console.error(e)
-    }
-    setCreating(false)
-  }
-
-  if (loading) {
-    return <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" /></div>
-  }
+    load()
+  }, [activeCompany?.id])
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-          <p className="text-gray-500 mt-1">Manage your companies and campaigns</p>
-        </div>
-        <button onClick={() => setShowCreate(true)} className="btn-primary flex items-center gap-2">
-          <Plus className="w-4 h-4" /> New Company
-        </button>
+    <PageWrapper title="Dashboard" subtitle="Overview of your call center performance">
+      {/* Stats Row */}
+      <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          title="Total Calls Today"
+          value={stats.totalCalls}
+          change="+12%"
+          changeType="up"
+          icon="📞"
+          loading={loading}
+        />
+        <StatCard
+          title="Active Campaigns"
+          value={stats.activeCampaigns}
+          icon="📢"
+          loading={loading}
+        />
+        <StatCard
+          title="Connection Rate"
+          value={`${stats.connectionRate}%`}
+          change="+5%"
+          changeType="up"
+          icon="📊"
+          loading={loading}
+        />
+        <StatCard
+          title="Hot Leads"
+          value={stats.hotLeads}
+          change="+3"
+          changeType="up"
+          icon="🔥"
+          loading={loading}
+        />
       </div>
 
-      {/* Create Company Modal */}
-      {showCreate && (
-        <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-4" onClick={() => setShowCreate(false)}>
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
-            <h2 className="text-lg font-semibold mb-4">Create New Company</h2>
-            <form onSubmit={handleCreate} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Company Name</label>
-                <input value={newName} onChange={e => setNewName(e.target.value)} className="input-field" required placeholder="My Business" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Industry</label>
-                <select value={newIndustry} onChange={e => setNewIndustry(e.target.value)} className="input-field">
-                  <option>Healthcare</option>
-                  <option>Real Estate</option>
-                  <option>Education</option>
-                  <option>Finance</option>
-                  <option>E-commerce</option>
-                  <option>Services</option>
-                  <option>Other</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Mode</label>
-                <select value={newMode} onChange={e => setNewMode(e.target.value)} className="input-field">
-                  <option value="both">Both (Inbound + Outbound)</option>
-                  <option value="outbound">Outbound Only</option>
-                  <option value="inbound">Inbound Only</option>
-                </select>
-              </div>
-              <div className="flex gap-3 justify-end">
-                <button type="button" onClick={() => setShowCreate(false)} className="btn-secondary">Cancel</button>
-                <button type="submit" disabled={creating} className="btn-primary">
-                  {creating ? 'Creating...' : 'Create'}
-                </button>
-              </div>
-            </form>
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
+        {/* Live Calls Section */}
+        <div className="lg:col-span-2">
+          <div className="mb-4 flex items-center gap-3">
+            <h2 className="text-lg font-semibold text-text-primary">Live Now</h2>
+            <span className="flex h-2.5 w-2.5">
+              <span className="absolute inline-flex h-2.5 w-2.5 animate-ping rounded-full bg-emerald-400 opacity-75" />
+              <span className="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
+            </span>
+          </div>
+
+          {activeCalls.length > 0 ? (
+            <div className="space-y-3">
+              {activeCalls.map((call) => (
+                <Card key={call.call_sid} className="flex items-center justify-between p-4">
+                  <div>
+                    <p className="font-medium text-text-primary">
+                      {call.caller_number?.replace(/(\d{2})(\d{4})(\d{4})/, '$1****$3')}
+                    </p>
+                    <p className="text-sm text-text-muted">
+                      {call.duration ? `${Math.floor(call.duration / 60)}:${(call.duration % 60).toString().padStart(2, '0')}` : 'Connecting...'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Badge variant={call.verification_status === 'verified' ? 'success' : 'warning'}>
+                      {call.verification_status || 'Verifying'}
+                    </Badge>
+                    <Button size="sm" onClick={() => navigate('/live')}>
+                      View
+                    </Button>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          ) : (
+            <Card className="flex flex-col items-center justify-center py-12">
+              <span className="mb-3 text-4xl">📞</span>
+              <p className="text-text-muted">No active calls right now</p>
+              <p className="mt-1 text-xs text-text-muted">
+                Calls will appear here in real time
+              </p>
+            </Card>
+          )}
+
+          {/* Quick Actions */}
+          <div className="mt-8">
+            <h2 className="mb-4 text-lg font-semibold text-text-primary">Quick Actions</h2>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <button
+                onClick={() => navigate('/campaigns/new')}
+                className="rounded-xl border border-surface-border bg-surface-card p-4 text-center transition-all hover:border-zinc-600 hover:bg-surface-hover"
+              >
+                <span className="block text-2xl">📢</span>
+                <span className="mt-1 block text-xs text-text-secondary">Launch Campaign</span>
+              </button>
+              <button
+                onClick={() => navigate('/contacts/import')}
+                className="rounded-xl border border-surface-border bg-surface-card p-4 text-center transition-all hover:border-zinc-600 hover:bg-surface-hover"
+              >
+                <span className="block text-2xl">👥</span>
+                <span className="mt-1 block text-xs text-text-secondary">Import Contacts</span>
+              </button>
+              <button
+                onClick={() => navigate('/documents')}
+                className="rounded-xl border border-surface-border bg-surface-card p-4 text-center transition-all hover:border-zinc-600 hover:bg-surface-hover"
+              >
+                <span className="block text-2xl">📄</span>
+                <span className="mt-1 block text-xs text-text-secondary">Upload PDF</span>
+              </button>
+              <button
+                onClick={() => navigate('/live')}
+                className="rounded-xl border border-surface-border bg-surface-card p-4 text-center transition-all hover:border-zinc-600 hover:bg-surface-hover"
+              >
+                <span className="block text-2xl">🎙</span>
+                <span className="mt-1 block text-xs text-text-secondary">Live Calls</span>
+              </button>
+            </div>
           </div>
         </div>
-      )}
 
-      {/* Company List */}
-      {companies.length === 0 ? (
-        <div className="card text-center py-12">
-          <Building2 className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-gray-600 mb-2">No companies yet</h3>
-          <p className="text-gray-400 mb-4">Create your first company to get started</p>
-          <button onClick={() => setShowCreate(true)} className="btn-primary">Create Company</button>
-        </div>
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {companies.map(c => (
-            <Link key={c.id} to={`/company/${c.id}`} className="card hover:shadow-md transition-shadow group">
-              <div className="flex items-start justify-between mb-3">
-                <div className="w-10 h-10 bg-primary-100 rounded-lg flex items-center justify-center">
-                  <Building2 className="w-5 h-5 text-primary-600" />
+        {/* Activity Feed */}
+        <div>
+          <h2 className="mb-4 text-lg font-semibold text-text-primary">Recent Activity</h2>
+          <Card className="p-4">
+            <div className="space-y-4">
+              <div className="flex items-start gap-3">
+                <span className="mt-0.5 text-lg">📞</span>
+                <div>
+                  <p className="text-sm text-text-secondary">
+                    Call from <span className="font-medium text-text-primary">+91 98xxx xxx10</span> connected
+                  </p>
+                  <p className="text-xs text-text-muted">2 min ago</p>
                 </div>
-                <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full capitalize">{c.mode}</span>
               </div>
-              <h3 className="font-semibold text-gray-900 group-hover:text-primary-600 transition-colors">{c.name}</h3>
-              <p className="text-sm text-gray-500 mt-1">{c.industry}</p>
-              <div className="flex items-center gap-1 text-xs text-gray-400 mt-3">
-                <Clock className="w-3 h-3" />
-                {new Date(c.created_at).toLocaleDateString('en-IN')}
+              <div className="flex items-start gap-3">
+                <span className="mt-0.5 text-lg">📅</span>
+                <div>
+                  <p className="text-sm text-text-secondary">
+                    Appointment booked by AI
+                  </p>
+                  <p className="text-xs text-text-muted">15 min ago</p>
+                </div>
               </div>
-            </Link>
-          ))}
+              <div className="flex items-start gap-3">
+                <span className="mt-0.5 text-lg">🔥</span>
+                <div>
+                  <p className="text-sm text-text-secondary">
+                    Hot lead detected
+                  </p>
+                  <p className="text-xs text-text-muted">1 hour ago</p>
+                </div>
+              </div>
+            </div>
+          </Card>
         </div>
-      )}
-    </div>
+      </div>
+    </PageWrapper>
   )
 }

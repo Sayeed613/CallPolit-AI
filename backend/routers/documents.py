@@ -8,7 +8,7 @@ from services.supabase_client import (
     insert_chunk,
     match_chunks,
 )
-from services.groq_service import get_embedding
+from services.gemini_service import get_embedding
 from services.rag_service import chunk_text
 from services.auth_middleware import get_current_user
 

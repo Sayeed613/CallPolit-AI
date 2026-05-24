@@ -1,0 +1,17 @@
+
+  [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m1188[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5173[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.31.164:[1m5173[22m/[39m
+[2m1:53:48 am[22m [36m[1m[vite][22m[39m [32m✨ new dependencies optimized: [33mthree[32m[39m
+[2m1:53:48 am[22m [36m[1m[vite][22m[39m [32m✨ optimized dependencies changed. reloading[39m
+[2m2:17:38 am[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/index.css[22m
+[2m2:17:52 am[22m [36m[1m[vite][22m[39m [32mvite.config.ts changed, restarting server...[39m
+[2m2:17:52 am[22m [36m[1m[vite][22m[39m server restarted.
+[2m2:30:40 am[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2mindex.html[22m
+[2m2:52:02 am[22m [36m[1m[vite][22m[39m [32mvite.config.ts changed, restarting server...[39m
+Re-optimizing dependencies because lockfile has changed
+[2m2:52:02 am[22m [36m[1m[vite][22m[39m server restarted.
+[2m2:52:07 am[22m [31m[1m[vite][22m[39m Pre-transform error: [postcss] D:/CallPolit-AI/frontend/src/index.css:102:5: The `rounded-button` class does not exist. If `rounded-button` is a custom class, make sure it is defined within a `@layer` directive.
+[2m3:45:25 am[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Signup.tsx[22m
+[2m3:46:23 am[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/Signup.tsx[22m

@@ -166,27 +166,59 @@ def update_campaign_status(campaign_id: str, status: str) -> None:
 
 
 def increment_campaign_called(campaign_id: str) -> None:
-    camp = get_campaign(campaign_id)
-    if camp:
-        supabase.table("campaigns").update({"called": (camp.get("called") or 0) + 1}).eq("id", campaign_id).execute()
+    """Atomic increment using Supabase RPC to avoid race conditions."""
+    try:
+        supabase.rpc("increment_counter", {
+            "table_name": "campaigns",
+            "column_name": "called",
+            "row_id": campaign_id,
+        }).execute()
+    except Exception:
+        camp = get_campaign(campaign_id)
+        if camp:
+            supabase.table("campaigns").update({"called": (camp.get("called") or 0) + 1}).eq("id", campaign_id).execute()
 
 
 def increment_campaign_connected(campaign_id: str) -> None:
-    camp = get_campaign(campaign_id)
-    if camp:
-        supabase.table("campaigns").update({"connected": (camp.get("connected") or 0) + 1}).eq("id", campaign_id).execute()
+    """Atomic increment using Supabase RPC to avoid race conditions."""
+    try:
+        supabase.rpc("increment_counter", {
+            "table_name": "campaigns",
+            "column_name": "connected",
+            "row_id": campaign_id,
+        }).execute()
+    except Exception:
+        camp = get_campaign(campaign_id)
+        if camp:
+            supabase.table("campaigns").update({"connected": (camp.get("connected") or 0) + 1}).eq("id", campaign_id).execute()
 
 
 def increment_campaign_unreachable(campaign_id: str) -> None:
-    camp = get_campaign(campaign_id)
-    if camp:
-        supabase.table("campaigns").update({"unreachable": (camp.get("unreachable") or 0) + 1}).eq("id", campaign_id).execute()
+    """Atomic increment using Supabase RPC to avoid race conditions."""
+    try:
+        supabase.rpc("increment_counter", {
+            "table_name": "campaigns",
+            "column_name": "unreachable",
+            "row_id": campaign_id,
+        }).execute()
+    except Exception:
+        camp = get_campaign(campaign_id)
+        if camp:
+            supabase.table("campaigns").update({"unreachable": (camp.get("unreachable") or 0) + 1}).eq("id", campaign_id).execute()
 
 
 def increment_campaign_invalid(campaign_id: str) -> None:
-    camp = get_campaign(campaign_id)
-    if camp:
-        supabase.table("campaigns").update({"invalid_count": (camp.get("invalid_count") or 0) + 1}).eq("id", campaign_id).execute()
+    """Atomic increment using Supabase RPC to avoid race conditions."""
+    try:
+        supabase.rpc("increment_counter", {
+            "table_name": "campaigns",
+            "column_name": "invalid_count",
+            "row_id": campaign_id,
+        }).execute()
+    except Exception:
+        camp = get_campaign(campaign_id)
+        if camp:
+            supabase.table("campaigns").update({"invalid_count": (camp.get("invalid_count") or 0) + 1}).eq("id", campaign_id).execute()
 
 
 def get_campaign(campaign_id: str) -> dict | None:

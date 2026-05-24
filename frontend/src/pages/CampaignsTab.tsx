@@ -1,151 +1,144 @@
-import { useState, useEffect } from 'react'
-import { launchCampaign, getCompany } from '../lib/api'
-import { supabase } from '../lib/supabase'
-import { Play, Loader2, Phone, CheckCircle, XCircle, Activity } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { motion } from 'framer-motion'
+import { Button } from '../components/ui/Button'
+import { Card } from '../components/ui/Card'
+import { Badge } from '../components/ui/Badge'
+import { Progress } from '../components/ui/Progress'
+import { Tabs } from '../components/ui/Tabs'
+import { Skeleton } from '../components/ui/Skeleton'
+import { PageWrapper } from '../components/layout/PageWrapper'
+import { useCompanyStore } from '../stores/companyStore'
+import { api } from '../lib/api'
 
-interface Campaign {
-  id: string
-  name: string
-  status: string
-  total_contacts: number
-  called: number
-  connected: number
-  launched_at: string
+const tabs = [
+  { id: 'all', label: 'All' },
+  { id: 'running', label: 'Running' },
+  { id: 'completed', label: 'Completed' },
+  { id: 'failed', label: 'Failed' },
+  { id: 'scheduled', label: 'Scheduled' },
+]
+
+const statusColors: Record<string, 'brand' | 'success' | 'warning' | 'error'> = {
+  running: 'brand',
+  completed: 'success',
+  failed: 'error',
+  scheduled: 'warning',
+  paused: 'warning',
 }
 
-export default function CampaignsTab({ companyId }: { companyId: string }) {
-  const [campaigns, setCampaigns] = useState<Campaign[]>([])
+export function CampaignsTab() {
+  const navigate = useNavigate()
+  const { activeCompany } = useCompanyStore()
+  const [campaigns, setCampaigns] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const [showLaunch, setShowLaunch] = useState(false)
-  const [name, setName] = useState('')
-  const [cpm, setCpm] = useState(2)
-  const [launching, setLaunching] = useState(false)
+  const [activeTab, setActiveTab] = useState('all')
 
-  // Since there's no GET campaigns endpoint yet, we'll try to load from company data
   useEffect(() => {
-    loadCampaigns()
-    const interval = setInterval(loadCampaigns, 10000)
-    return () => clearInterval(interval)
-  }, [companyId])
-
-  async function loadCampaigns() {
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) return
-      const { data } = await supabase
-        .from('campaigns')
-        .select('*')
-        .eq('company_id', companyId)
-        .order('launched_at', { ascending: false })
-      if (data) setCampaigns(data as Campaign[])
-    } catch (e) {
-      console.error(e)
+    async function load() {
+      const cid = activeCompany?.id || ''
+      if (!cid) { setLoading(false); return }
+      try {
+        const res = await api.campaigns.list(cid)
+        setCampaigns(res.campaigns || [])
+      } catch {
+        // fallback
+      } finally {
+        setLoading(false)
+      }
     }
-    setLoading(false)
-  }
+    load()
+  }, [activeCompany?.id])
 
-  async function handleLaunch(e: React.FormEvent) {
-    e.preventDefault()
-    setLaunching(true)
-    try {
-      await launchCampaign(companyId, name, cpm)
-      setShowLaunch(false)
-      setName('')
-      await loadCampaigns()
-    } catch (err) {
-      console.error(err)
-    }
-    setLaunching(false)
-  }
-
-  const progress = (c: Campaign) =>
-    c.total_contacts > 0 ? Math.round(((c.called || 0) / c.total_contacts) * 100) : 0
+  const filtered = activeTab === 'all'
+    ? campaigns
+    : campaigns.filter((c) => c.status === activeTab)
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-          <Phone className="w-5 h-5 text-primary-600" /> Campaigns
-        </h3>
-        <button onClick={() => setShowLaunch(true)} className="btn-primary flex items-center gap-2 text-sm py-1.5 px-3">
-          <Play className="w-4 h-4" /> Launch Campaign
-        </button>
-      </div>
+    <PageWrapper
+      title="Campaigns"
+      subtitle="Manage your outbound calling campaigns"
+      actions={
+        <Button onClick={() => navigate('/campaigns/new')} icon="plus">
+          Launch Campaign
+        </Button>
+      }
+    >
+      <Tabs
+        tabs={tabs.map((t) => ({
+          ...t,
+          badge: t.id === 'all' ? campaigns.length : campaigns.filter((c) => c.status === t.id).length,
+        }))}
+        activeTab={activeTab}
+        onChange={setActiveTab}
+        className="mb-6"
+      />
 
-      {/* Launch Modal */}
-      {showLaunch && (
-        <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-4" onClick={() => setShowLaunch(false)}>
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
-            <h2 className="text-lg font-semibold mb-4">Launch Campaign</h2>
-            <form onSubmit={handleLaunch} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Campaign Name</label>
-                <input value={name} onChange={e => setName(e.target.value)} className="input-field" required placeholder="June Follow-up" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Calls per Minute</label>
-                <input type="number" value={cpm} onChange={e => setCpm(Number(e.target.value))} className="input-field" min={1} max={10} />
-              </div>
-              <div className="flex gap-3 justify-end">
-                <button type="button" onClick={() => setShowLaunch(false)} className="btn-secondary">Cancel</button>
-                <button type="submit" disabled={launching} className="btn-primary">
-                  {launching ? 'Launching...' : 'Launch'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Campaign List */}
       {loading ? (
-        <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-primary-600" /></div>
-      ) : campaigns.length === 0 ? (
-        <div className="card text-center py-8">
-          <Activity className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-          <p className="text-gray-500">No campaigns yet</p>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {[1, 2, 3, 4].map((i) => (
+            <Card key={i} className="p-5">
+              <Skeleton className="mb-3 h-5 w-40" />
+              <Skeleton className="mb-4 h-2 w-full" />
+              <div className="flex gap-4">
+                <Skeleton className="h-4 w-16" />
+                <Skeleton className="h-4 w-16" />
+                <Skeleton className="h-4 w-16" />
+              </div>
+            </Card>
+          ))}
         </div>
+      ) : filtered.length === 0 ? (
+        <Card className="flex flex-col items-center py-16">
+          <span className="mb-4 text-5xl">📢</span>
+          <h3 className="mb-2 text-lg font-medium text-text-primary">No campaigns yet</h3>
+          <p className="mb-6 text-sm text-text-muted">Launch your first campaign to start reaching customers</p>
+          <Button onClick={() => navigate('/campaigns/new')}>Launch Campaign</Button>
+        </Card>
       ) : (
-        <div className="space-y-3">
-          {campaigns.map(c => (
-            <div key={c.id} className="card">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <h4 className="font-medium text-gray-900">{c.name}</h4>
-                  <p className="text-xs text-gray-400">
-                    {c.launched_at ? new Date(c.launched_at).toLocaleString('en-IN') : 'Draft'}
-                  </p>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {filtered.map((campaign, i) => (
+            <motion.div
+              key={campaign.id}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.05 }}
+            >
+              <Card
+                className="cursor-pointer p-5 transition-all hover:border-zinc-600/50"
+                onClick={() => navigate(`/campaigns/${campaign.id}`)}
+              >
+                <div className="mb-3 flex items-start justify-between">
+                  <div>
+                    <h3 className="font-semibold text-text-primary">{campaign.name}</h3>
+                    <p className="text-xs text-text-muted">
+                      {new Date(campaign.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <Badge variant={statusColors[campaign.status] || 'brand'}>
+                    {campaign.status}
+                  </Badge>
                 </div>
-                <span className={`text-xs font-medium px-2 py-1 rounded-full capitalize ${
-                  c.status === 'completed' ? 'bg-green-100 text-green-700' :
-                  c.status === 'running' ? 'bg-blue-100 text-blue-700' :
-                  'bg-gray-100 text-gray-600'
-                }`}>
-                  {c.status}
-                </span>
-              </div>
-              {/* Progress bar */}
-              <div className="w-full bg-gray-200 rounded-full h-2 mb-3">
-                <div className="bg-primary-500 h-2 rounded-full transition-all duration-500" style={{ width: `${progress(c)}%` }} />
-              </div>
-              <div className="grid grid-cols-3 gap-4 text-center">
-                <div>
-                  <div className="text-lg font-semibold text-gray-900">{c.called || 0}/{c.total_contacts}</div>
-                  <div className="text-xs text-gray-500">Called</div>
+
+                <Progress
+                  value={campaign.called || 0}
+                  max={campaign.total_contacts || 1}
+                  size="sm"
+                  className="mb-3"
+                />
+
+                <div className="flex items-center gap-4 text-xs text-text-muted">
+                  <span>{campaign.called || 0} / {campaign.total_contacts || 0} called</span>
+                  <span>{campaign.connected || 0} connected</span>
+                  {campaign.hot_leads > 0 && (
+                    <span className="text-yellow-400">{campaign.hot_leads} hot</span>
+                  )}
                 </div>
-                <div>
-                  <div className="text-lg font-semibold text-green-600">{c.connected || 0}</div>
-                  <div className="text-xs text-gray-500">Connected</div>
-                </div>
-                <div>
-                  <div className="text-lg font-semibold text-primary-600">{progress(c)}%</div>
-                  <div className="text-xs text-gray-500">Progress</div>
-                </div>
-              </div>
-            </div>
+              </Card>
+            </motion.div>
           ))}
         </div>
       )}
-    </div>
+    </PageWrapper>
   )
 }

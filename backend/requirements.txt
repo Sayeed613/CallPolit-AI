@@ -1,7 +1,6 @@
 apscheduler
 fastapi
 google-generativeai
-groq
 httpx
 openpyxl
 pandas
@@ -12,3 +11,5 @@ requests
 supabase
 twilio
 uvicorn
+websockets
+
