@@ -1,48 +1,73 @@
-import React from 'react'
+import { forwardRef } from 'react'
 import { cn } from '../../lib/utils'
-import { Loader2 } from 'lucide-react'
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary' | 'ghost' | 'danger' | 'success'
-  size?: 'sm' | 'md' | 'lg'
+  variant?: 'primary' | 'secondary' | 'ghost' | 'danger' | 'outline'
+  size?: 'xs' | 'sm' | 'md' | 'lg'
   loading?: boolean
   icon?: React.ReactNode
 }
 
-export function Button({
-  className,
-  variant = 'primary',
-  size = 'md',
-  loading = false,
-  icon,
-  children,
-  disabled,
-  ...props
-}: ButtonProps) {
-  const base = 'inline-flex items-center justify-center gap-2 font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-brand-500/50 disabled:opacity-50 disabled:cursor-not-allowed rounded-button'
-
-  const variants = {
-    primary: 'bg-brand-500 text-white hover:bg-brand-600 active:bg-brand-700 shadow-lg shadow-brand-500/20 hover:shadow-brand-500/30 hover:scale-[1.02]',
-    secondary: 'bg-surface-card text-white border border-surface-border hover:bg-surface-hover hover:border-brand-500/30 active:bg-surface-card',
-    ghost: 'text-zinc-400 hover:text-white hover:bg-surface-card active:bg-surface-hover',
-    danger: 'bg-error text-white hover:bg-error-dark active:bg-error shadow-lg shadow-error/20',
-    success: 'bg-success text-white hover:bg-success-dark active:bg-success shadow-lg shadow-success/20',
-  }
-
-  const sizes = {
-    sm: 'px-3 py-1.5 text-xs',
-    md: 'px-5 py-2.5 text-sm',
-    lg: 'px-6 py-3 text-base',
-  }
-
-  return (
-    <button
-      className={cn(base, variants[variant], sizes[size], className)}
-      disabled={disabled || loading}
-      {...props}
-    >
-      {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : icon || null}
-      {children}
-    </button>
-  )
+const variants = {
+  primary:
+    'bg-brand-500 text-white hover:bg-brand-600 active:bg-brand-700 hover:scale-[1.01]',
+  secondary:
+    'bg-bg-elevated border border-border-default text-text-primary hover:bg-bg-overlay active:bg-bg-elevated',
+  ghost:
+    'bg-transparent text-text-secondary hover:bg-bg-elevated active:bg-bg-overlay',
+  danger:
+    'bg-error/10 text-error border border-error/20 hover:bg-error/20 active:bg-error/30',
+  outline:
+    'bg-transparent border border-border-strong text-text-primary hover:bg-bg-elevated active:bg-bg-overlay',
 }
+
+const sizes = {
+  xs: 'px-2 py-1 text-xs gap-1',
+  sm: 'px-3 py-1.5 text-sm gap-1.5',
+  md: 'px-4 py-2 text-sm gap-2',
+  lg: 'px-6 py-2.5 text-base gap-2',
+}
+
+const Button = forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ className, variant = 'primary', size = 'md', loading, disabled, icon, children, ...props }, ref) => {
+    const isDisabled = disabled || loading
+
+    return (
+      <button
+        ref={ref}
+        disabled={isDisabled}
+        className={cn(
+          'relative inline-flex items-center justify-center font-medium rounded-button transition-all duration-150 ease-out',
+          'focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:ring-offset-1 focus:ring-offset-bg-base',
+          variants[variant],
+          sizes[size],
+          isDisabled && 'opacity-40 cursor-not-allowed hover:scale-100',
+          className,
+        )}
+        {...props}
+      >
+        {loading ? (
+          <svg
+            className="animate-spin h-4 w-4"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+            />
+          </svg>
+        ) : icon ? (
+          <span className="flex-shrink-0">{icon}</span>
+        ) : null}
+        {children}
+      </button>
+    )
+  },
+)
+
+Button.displayName = 'Button'
+export default Button

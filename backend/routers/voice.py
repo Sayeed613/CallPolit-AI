@@ -1,1045 +1,300 @@
-from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Form, Query, HTTPException
-from fastapi.responses import Response
-import sys
-
-from services.supabase_client import (
-    supabase,
-    get_company,
-    get_company_by_phone,
-    create_call_log,
-    update_call_log,
-    get_call_log_by_sid,
-    match_chunks,
-    update_contact_status,
-    update_contact_retry,
-    mark_contact_invalid,
-    update_contact_best_time,
-    increment_campaign_called,
-    increment_campaign_connected,
-    increment_campaign_unreachable,
-    increment_campaign_invalid,
-    get_campaign,
-    update_campaign_status,
-    mark_call_log_whatsapp_pending,
-    mark_call_log_callback,
-    create_appointment,
-)
-from services.gemini_service import generate_response, get_embedding
-from services.verification_service import VerificationService
-from services.rag_service import build_rag_context, detect_escalation
-from config.settings import settings
-
-router = APIRouter(prefix="/api/voice", tags=["voice"])
-
-
-# ─── Constants ───────────────────────────────────────────────────────────────────
-
-MAX_RETRIES = 3
-RETRY_DELAY_HOURS = 2
-CALLING_WINDOW_START = 9   # 9 AM
-CALLING_WINDOW_END = 21    # 9 PM
-
-
-# ─── Helpers ─────────────────────────────────────────────────────────────────────
-
-def _build_twiml(body: str) -> str:
-    return f'<?xml version="1.0" encoding="UTF-8"?><Response>{body}</Response>'
-
-
-def _get_next_retry_time(current_retry: int) -> str | None:
-    """Calculate next retry time in IST. Returns ISO string or None if max retries exceeded."""
-    if current_retry >= MAX_RETRIES:
-        return None
-
-    now = datetime.now(timezone.utc)
-    next_time = now.timestamp() + (RETRY_DELAY_HOURS * 3600)
-    next_dt_utc = datetime.fromtimestamp(next_time, tz=timezone.utc)
-
-    # Convert to IST (UTC + 5:30) for calling window check
-    ist_offset = timedelta(hours=5, minutes=30)
-    next_dt_ist = next_dt_utc + ist_offset
-
-    # Check if next IST time falls within calling window (9 AM - 9 PM)
-    hour_ist = next_dt_ist.hour
-    if hour_ist < CALLING_WINDOW_START:
-        # Move to 9 AM IST same day
-        next_dt_ist = next_dt_ist.replace(hour=CALLING_WINDOW_START, minute=0, second=0, microsecond=0)
-        # Convert back to UTC
-        next_dt_utc = next_dt_ist - ist_offset
-    elif hour_ist >= CALLING_WINDOW_END:
-        # Move to 9 AM IST next day
-        next_dt_ist = next_dt_ist.replace(hour=CALLING_WINDOW_START, minute=0, second=0, microsecond=0)
-        next_dt_ist += timedelta(days=1)
-        # Convert back to UTC
-        next_dt_utc = next_dt_ist - ist_offset
-
-    return next_dt_utc.isoformat()
-
-
-def _schedule_retry_call(contact_id: str, phone: str, campaign_id: str, retry_count: int) -> None:
-    """Schedule a retry call using APScheduler."""
-    try:
-        from apscheduler.triggers.date import DateTrigger
-        from services.scheduler import get_scheduler
-
-        next_retry_at = _get_next_retry_time(retry_count)
-        if next_retry_at is None:
-            return  # Max retries exceeded, handled by caller
-
-        scheduler = get_scheduler()
-        run_date = datetime.fromisoformat(next_retry_at)
-
-        scheduler.add_job(
-            _place_retry_call,
-            trigger=DateTrigger(run_date=run_date),
-            args=[phone, campaign_id, contact_id, retry_count + 1],
-            id=f"retry_{campaign_id}_{contact_id}_{retry_count + 1}",
-            replace_existing=True,
-        )
-
-        # Update contact with next retry info
-        update_contact_retry(
-            contact_id,
-            retry_count,
-            next_retry_at,
-            "pending"
-        )
-    except Exception as e:
-        print(f"SCHEDULE_RETRY ERROR: {e}", file=sys.stderr)
-
-
-async def _place_retry_call(to_phone: str, campaign_id: str, contact_id: str, retry_number: int) -> None:
-    """Place a retry call. Called by APScheduler."""
-    try:
-        import asyncio
-        from services.twilio_service import make_call
-        call_sid = await asyncio.to_thread(make_call, to_phone, campaign_id, contact_id)
-        # Create call log with retry_number
-        create_call_log(campaign_id, contact_id, call_sid, status="initiated")
-        # Update the call log's retry_number
-        update_call_log(call_sid, {"retry_number": retry_number})
-    except Exception as e:
-        print(f"RETRY_CALL FAILED: {e}", file=sys.stderr)
-
-
-def _schedule_callback(contact_id: str, phone: str, campaign_id: str, when: str | None = None) -> None:
-    """Schedule a callback requested by the customer."""
-    try:
-        from apscheduler.triggers.date import DateTrigger
-        from services.scheduler import get_scheduler
-
-        # Default: call back in 2 hours (same as retry)
-        if when is None:
-            when = _get_next_retry_time(0)
-            if when is None:
-                return
-
-        scheduler = get_scheduler()
-        run_date = datetime.fromisoformat(when)
-
-        scheduler.add_job(
-            _place_retry_call,
-            trigger=DateTrigger(run_date=run_date),
-            args=[phone, campaign_id, contact_id, 0],
-            id=f"callback_{campaign_id}_{contact_id}",
-            replace_existing=True,
-        )
-    except Exception as e:
-        print(f"SCHEDULE_CALLBACK ERROR: {e}", file=sys.stderr)
-
-
-def _is_wrong_number(transcript_text: str) -> bool:
-    """Detect if customer says this is a wrong number."""
-    wrong_number_phrases = [
-        "galat number", "wrong number", "galat hai", "galat number hai",
-        "aap kis se baat", "kaun hai aap", "aap kaun hain",
-        "kisi ko nahi janta", "nahi jaanta", "pata nahi",
-        "aapne kya kaha", "aap kya bol rahe", "yeh kaun hai",
-    ]
-    text_lower = transcript_text.lower()
-    for phrase in wrong_number_phrases:
-        if phrase in text_lower:
-            return True
-    return False
-
-
-def _detect_callback_request(transcript_text: str) -> str | None:
-    """Detect if customer asks to be called back later. Returns suggested time or None."""
-    callback_phrases = [
-        "baad mein call karo", "baad mein call karna", "phir call karo",
-        "baad mein baat karenge", "abhi nahi", "baad mein karo",
-        "call me later", "call back later", "later",
-        "thodi der baad", "kuch der baad", "baad mein",
-    ]
-    text_lower = transcript_text.lower()
-    for phrase in callback_phrases:
-        if phrase in text_lower:
-            return "2hours"  # Default: call back in 2 hours
-    return None
-
-
-# ─── Language Detection ─────────────────────────────────────────────────────────
-
-def _detect_language(text: str) -> str:
-    """Detect the language of the customer's speech.
-
-    Keywords-based detection for common Indian languages.
-    Supports: Hindi, Kannada, English.
-    Falls back to 'hi-IN' (Hindi).
-    """
-    text_lower = text.lower().strip()
-    if not text_lower:
-        return "hi-IN"
-
-    # Hindi / Hinglish indicators
-    hindi_indicators = [
-        "hai", "hain", "hoon", "kya", "kaise", "kyun", "kab", "kahan",
-        "mujhe", "tum", "aap", "mera", "tera", "iska", "uska",
-        "nahi", "haan", "theek", "accha", "chahiye", "sakta",
-        "sakte", "karo", "karna", "jaana", "aana", "dena", "lena",
-    ]
-    # Kannada indicators
-    kannada_indicators = [
-        "alli", "illa", "ide", "iru", "beku", "beda",
-        "yenu", "yaake", "hege", "yelli", "naanu", "neevu",
-        "avaru", "idu", "adhu", "nimma", "namma", "hogbeku",
-        "barbeku", "madtini", "madbeku", "gotilla", "gottide",
-        "namaskara", "hegidira", "chennagidini", "thilidira",
-        "barutte", "hogutte", "madutta", "kelsa", "matha",
-        "tamma", "akka", "anna", "bhaya", "sari",
-        "banni", "kodi", "thago", "nodi", "kelu", "heLu",
-        "ellya", "ootha", "neeru", "ella", "ellaaru",
-        "hesaru", "ooru", "mane", "kade", "munde",
-        "hinde", "mele", "kelage", "olage", "horage",
-        "sanna", "dodda", "olleya", "kettadu", "jaasti",
-        "kadime", "sakath", "bhari", "thumba", "swalpa",
-        "hosa", "haleya", "hididu", "bididu",
-    ]
-    # English indicators
-    english_indicators = [
-        "i want", "i would like", "can you", "please", "thank you",
-        "what is", "when can", "how much", "i need", "book",
-        "appointment", "schedule", "yes", "no", "sure", "okay",
-    ]
-
-    # Count matches (using words, not substrings, for accuracy)
-    words = text_lower.split()
-
-    def score(indicators):
-        return sum(1 for ind in indicators if ind in words or ind in text_lower)
-
-    scores = {
-        "hi-IN": score(hindi_indicators),
-        "kn-IN": score(kannada_indicators),
-        "en-IN": score(english_indicators),
-    }
-
-    # Return the language with highest score; if low confidence, use Hindi
-    best = max(scores, key=scores.get)
-    if scores[best] >= 2:
-        return best
-
-    # Check for English dominance (threshold reduced from 0.6 to 0.5 per spec)
-    en_words = sum(1 for w in words if w.isascii() and w.isalpha() and len(w) > 2)
-    total_words = sum(1 for w in words if w.isalpha())
-    if total_words > 2 and (en_words / total_words) > 0.5:
-        return "en-IN"
-
-    return "hi-IN"
-
-
-# ─── Appointment Booking ────────────────────────────────────────────────────────
-
-import re
-
-APPOINTMENT_PATTERN = re.compile(
-    r"\[APPOINTMENT:\s*name=([^,\]]+),\s*date=(\d{4}-\d{2}-\d{2}),\s*time=(\d{2}:\d{2})(?:,\s*notes=([^,\]]*))?\]"
-)
-
-
-def _parse_appointment_marker(text: str) -> dict | None:
-    """Parse appointment booking marker from AI response.
-
-    Expected format:
-        [APPOINTMENT: name=Patient Name, date=2025-07-20, time=16:00]
-        [APPOINTMENT: name=Patient Name, date=2025-07-20, time=16:00, notes=Follow-up]
-
-    Returns dict with keys: name, date, time, notes (or None if not found)
-    """
-    match = APPOINTMENT_PATTERN.search(text)
-    if not match:
-        return None
-    return {
-        "name": match.group(1).strip(),
-        "date": match.group(2).strip(),
-        "time": match.group(3).strip(),
-        "notes": match.group(4).strip() if match.group(4) else "",
-    }
-
-
-# ─── Twilio Webhooks ─────────────────────────────────────────────────────────────
-
-
-def _lookup_company_by_phone(phone: str) -> tuple[str | None, str]:
-    """Look up a company by their Twilio phone number."""
-    try:
-        company = get_company_by_phone(phone)
-        if company:
-            return company["id"], company.get("name", "CallPilot AI")
-    except Exception:
-        pass
-
-    try:
-        all_companies = supabase.table("companies").select("*").execute()
-        for c in all_companies.data:
-            tp = c.get("twilio_phone", "")
-            if tp.replace("+", "").replace("-", "").replace(" ", "") == phone.replace("+", "").replace("-", "").replace(" ", ""):
-                return c["id"], c.get("name", "CallPilot AI")
-    except Exception:
-        pass
-
-    return None, "CallPilot AI"
-
-
-@router.post("/inbound", response_class=Response)
-async def inbound_call(
-    CallSid: str = Form(...),
-    From: str = Form(...),
-    To: str = Form(...),
-    CallStatus: str = Form(default="ringing"),
-    company_id: str | None = Query(default=None),
-):
-    """Twilio inbound call webhook (called when customer calls in)."""
-    try:
-        call_log = create_call_log(None, None, CallSid, status=CallStatus, direction="inbound")
-    except Exception:
-        pass
-
-    company_name = "CallPilot AI"
-    if company_id:
-        company = get_company(company_id)
-        if company:
-            company_name = company.get("name", "CallPilot AI")
-    else:
-        company_id, company_name = _lookup_company_by_phone(To)
-
-    # ─── Step 1: Ask for mobile number (verification flow) ────────────
-    # Start by asking the customer for their registered mobile number
-    verify_url = f"{settings.PUBLIC_BASE_URL}/api/voice/verify-step"
-    if company_id:
-        verify_url += f"?company_id={company_id}"
-
-    greeting = f"Namaste! {company_name} mein aapka swagat hai. Kripya apna mobile number batayein."
-
-    twiml_body = (
-        f'<Say language="hi-IN">{greeting}</Say>'
-        f'<Gather input="speech" action="{verify_url}" '
-        f'speechTimeout="auto" language="hi-IN" timeout="15">'
-        f'</Gather>'
-    )
-
-    return Response(
-        content=_build_twiml(twiml_body),
-        media_type="application/xml",
-    )
-
-
-@router.post("/verify-step", response_class=Response)
-async def verify_step(
-    CallSid: str = Form(...),
-    SpeechResult: str = Form(default=""),
-    company_id: str | None = Query(default=None),
-    From: str = Form(default=""),
-):
-    """Customer verification step for inbound calls.
-
-    Step 1 — Ask for mobile number, look up contact, determine verification level.
-    Step 2+ — Ask verification questions based on company settings.
-    """
-    if not SpeechResult.strip():
-        gretting_url = f"{settings.PUBLIC_BASE_URL}/api/voice/verify-step"
-        if company_id:
-            gretting_url += f"?company_id={company_id}"
-        twiml_body = (
-            '<Say language="hi-IN">Kripya apna mobile number batayein.</Say>'
-            f'<Gather input="speech" action="{gretting_url}" '
-            f'speechTimeout="auto" language="hi-IN" timeout="15">'
-            f'</Gather>'
-        )
-        return Response(content=_build_twiml(twiml_body), media_type="application/xml")
-
-    if not company_id:
-        company_id, _ = _lookup_company_by_phone(From)
-
-    if not company_id:
-        return Response(
-            content=_build_twiml(
-                '<Say language="hi-IN">Company not found. Namaste.</Say><Hangup/>'
-            ),
-            media_type="application/xml",
-        )
-
-    # Extract 10-digit number from speech
-    import re
-    digits = re.sub(r'\D', '', SpeechResult)
-    phone = digits[-10:] if len(digits) >= 10 else digits
-
-    if len(phone) < 10:
-        retry_url = f"{settings.PUBLIC_BASE_URL}/api/voice/verify-step?company_id={company_id}"
-        twiml_body = (
-            '<Say language="hi-IN">Maaf karein, sahi mobile number nahi mila. Kripya apna 10-digit mobile number dobara batayein.</Say>'
-            f'<Gather input="speech" action="{retry_url}" '
-            f'speechTimeout="auto" language="hi-IN" timeout="15">'
-            f'</Gather>'
-        )
-        return Response(content=_build_twiml(twiml_body), media_type="application/xml")
-
-    # Look up customer profile
-    vs = VerificationService()
-    customer = await vs.get_customer_profile(company_id, phone)
-
-    company = get_company(company_id)
-    verification_level = company.get("verification_level", 1) if company else 1
-    company_name = company.get("name", "CallPilot AI") if company else "CallPilot AI"
-
-    if not customer:
-        # Customer not found — proceed without profile
-        handle_url = f"{settings.PUBLIC_BASE_URL}/api/voice/handle-speech?company_id={company_id}"
-        twiml_body = (
-            f'<Say language="hi-IN">'
-            f'Aapka number hamare system mein nahi mila. Main aapki madad zaroor kar sakti hoon. Bataayein kaise madad kar sakti hoon?'
-            f'</Say>'
-            f'<Gather input="speech" action="{handle_url}" '
-            f'speechTimeout="auto" language="hi-IN" timeout="15">'
-            f'</Gather>'
-        )
-        return Response(content=_build_twiml(twiml_body), media_type="application/xml")
-
-    # Customer found — determine verification questions
-    if verification_level >= 2:
-        # Level 2+: Ask for name confirmation first
-        ask_url = f"{settings.PUBLIC_BASE_URL}/api/voice/verify-name?company_id={company_id}&phone={phone}"
-        twiml_body = (
-            '<Say language="hi-IN">'
-            f'Dhanyavaad! Kya aap {customer.get("name", "")} hain? Kripya haan ya nahi bataayein.'
-            '</Say>'
-            f'<Gather input="speech" action="{ask_url}" '
-            f'speechTimeout="auto" language="hi-IN" timeout="10">'
-            f'</Gather>'
-        )
-    else:
-        # Level 1: Just verify name, then proceed
-        ask_url = f"{settings.PUBLIC_BASE_URL}/api/voice/verify-name?company_id={company_id}&phone={phone}"
-        twiml_body = (
-            '<Say language="hi-IN">'
-            f'Dhanyavaad! Kya aap {customer.get("name", "")} hain? Haan ya nahi bataayein.'
-            '</Say>'
-            f'<Gather input="speech" action="{ask_url}" '
-            f'speechTimeout="auto" language="hi-IN" timeout="10">'
-            f'</Gather>'
-        )
-
-    return Response(content=_build_twiml(twiml_body), media_type="application/xml")
-
-
-@router.post("/verify-name", response_class=Response)
-async def verify_name(
-    CallSid: str = Form(...),
-    SpeechResult: str = Form(default=""),
-    company_id: str = Query(...),
-    phone: str = Query(...),
-):
-    """Verify customer name confirmation. Then proceed based on verification level."""
-    text_lower = SpeechResult.lower().strip()
-    confirmed = any(w in text_lower for w in ["haan", "ha", "yes", "sure", "hmm", "hoon", "hun"])
-    denied = any(w in text_lower for w in ["nahi", "no", "nope", "wrong", "galat"])
-
-    vs = VerificationService()
-    company = get_company(company_id)
-    verification_level = company.get("verification_level", 1) if company else 1
-    company_name = company.get("name", "CallPilot AI") if company else "CallPilot AI"
-
-    if denied:
-        # Wrong person — try to find correct person or escalate
-        handle_url = f"{settings.PUBLIC_BASE_URL}/api/voice/handle-speech?company_id={company_id}"
-        twiml_body = (
-            '<Say language="hi-IN">'
-            'Maaf karein. Main aapko hamari support team se connect kar rahi hoon. Kripya pratiksha karein.'
-            '</Say>'
-        )
-        return Response(content=_build_twiml(twiml_body), media_type="application/xml")
-
-    if not confirmed:
-        # Ask again
-        ask_url = f"{settings.PUBLIC_BASE_URL}/api/voice/verify-name?company_id={company_id}&phone={phone}"
-        twiml_body = (
-            '<Say language="hi-IN">Maaf karein, samajh nahi aaya. Kripya haan ya nahi bataayein.</Say>'
-            f'<Gather input="speech" action="{ask_url}" '
-            f'speechTimeout="auto" language="hi-IN" timeout="10">'
-            f'</Gather>'
-        )
-        return Response(content=_build_twiml(twiml_body), media_type="application/xml")
-
-    # Name confirmed — check if higher verification needed
-    if verification_level >= 2:
-        # Level 2: Ask for OTP verification
-        otp = await vs.send_otp(phone)
-        # Store OTP in session for later verification
-        supabase.table("verification_sessions").insert({
+import json
+import logging
+from fastapi import APIRouter, Request, Query
+from fastapi.responses import Response, PlainTextResponse
+from datetime import datetime
+from typing import Optional
+
+from services.supabase_client import supabase, increment_campaign_counter, check_campaign_completion
+from services.gemini_service import generate_response, generate_transcript_summary
+from services.rag_service import retrieve_relevant_chunks, build_context, detect_escalation, detect_sentiment
+from services.twilio_service import build_voice_twiml, build_gather_twiml, end_call_twiml
+from services.verification_service import generate_otp
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+# In-memory call state (in production, use Redis)
+_call_state: dict[str, dict] = {}
+VERIFICATION_OTPS: dict[str, str] = {}
+
+
+def _get_or_create_state(call_sid: str, company_id: str = "", campaign_id: str = "", contact_id: str = "", contact_name: str = "") -> dict:
+    if call_sid not in _call_state:
+        _call_state[call_sid] = {
             "company_id": company_id,
-            "phone": phone,
-            "otp": otp,
-            "otp_expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
-            "session_token": "inbound_" + CallSid,
-        }).execute()
-
-        otp_url = f"{settings.PUBLIC_BASE_URL}/api/voice/verify-otp?company_id={company_id}&phone={phone}"
-        twiml_body = (
-            '<Say language="hi-IN">'
-            'Aapke mobile par ek OTP bheja gaya hai. Kripya woh OTP bataayein.'
-            '</Say>'
-            f'<Gather input="speech" action="{otp_url}" '
-            f'speechTimeout="auto" language="hi-IN" timeout="15">'
-            f'</Gather>'
-        )
-        return Response(content=_build_twiml(twiml_body), media_type="application/xml")
-
-    # Level 1: Proceed to handle speech directly
-    handle_url = f"{settings.PUBLIC_BASE_URL}/api/voice/handle-speech?company_id={company_id}"
-    customer_data = await vs.get_customer_profile(company_id, phone)
-    name = customer_data.get("name", "") if customer_data else ""
-    greeting = f"Dhanyavaad {name}! Bataayein, main aapki kaise madad kar sakti hoon?"
-    twiml_body = (
-        f'<Say language="hi-IN">{greeting}</Say>'
-        f'<Gather input="speech" action="{handle_url}" '
-        f'speechTimeout="auto" language="hi-IN" timeout="15">'
-        f'</Gather>'
-    )
-    return Response(content=_build_twiml(twiml_body), media_type="application/xml")
+            "campaign_id": campaign_id,
+            "contact_id": contact_id,
+            "contact_name": contact_name,
+            "turn_count": 0,
+            "transcript": [],
+            "sentiment_history": [],
+            "verified": False,
+            "verification_step": 0,
+            "conversation_ended": False,
+        }
+    return _call_state[call_sid]
 
 
-@router.post("/verify-otp", response_class=Response)
-async def verify_otp(
-    CallSid: str = Form(...),
-    SpeechResult: str = Form(default=""),
-    company_id: str = Query(...),
-    phone: str = Query(...),
+@router.post("/outbound-call")
+async def outbound_call_webhook(
+    request: Request,
+    company_id: str = Query(""),
+    campaign_id: str = Query(""),
+    contact_id: str = Query(""),
+    contact_name: str = Query(""),
 ):
-    """Verify OTP entered by customer."""
-    vs = VerificationService()
-    otp_ok = await vs.verify_otp(phone, SpeechResult.strip())
+    """Twilio webhook for initializing an outbound call."""
+    form_data = await request.form()
+    call_sid = form_data.get("CallSid", "")
 
-    if otp_ok:
-        # OTP verified — proceed to main conversation
-        handle_url = f"{settings.PUBLIC_BASE_URL}/api/voice/handle-speech?company_id={company_id}"
-        customer_data = await vs.get_customer_profile(company_id, phone)
-        name = customer_data.get("name", "") if customer_data else ""
-        twiml_body = (
-            f'<Say language="hi-IN">Dhanyavaad {name}! Aapka verification safal raha. Bataayein, main aapki kaise madad kar sakti hoon?</Say>'
-            f'<Gather input="speech" action="{handle_url}" '
-            f'speechTimeout="auto" language="hi-IN" timeout="15">'
-            f'</Gather>'
+    state = _get_or_create_state(call_sid, company_id, campaign_id, contact_id, contact_name)
+
+    # Get company info
+    company = supabase.table("companies").select("*").eq("id", company_id).single().execute()
+    company_name = company.data.get("name", "Business") if company.data else "Business"
+    industry = company.data.get("industry", "service") if company.data else "service"
+    language = company.data.get("language_preference", ["hindi"])[0] if company.data else "hindi"
+
+    # Get contact info
+    contact = supabase.table("contacts").select("*").eq("id", contact_id).single().execute()
+    contact_language = contact.data.get("language", "hindi") if contact.data else "hindi"
+    state["contact_language"] = contact_language
+
+    # Get RAG context
+    chunks = retrieve_relevant_chunks(company_id, "introduction and purpose")
+    context = build_context(chunks)
+
+    # Build system prompt
+    system_prompt = (
+        f"You are a professional AI calling agent for {company_name}, a {industry} company. "
+        f"Your name is 'CallPilot Assistant'. Answer ONLY from the company documents provided. "
+        f"Speak in the customer's language. Be polite, professional, and concise. "
+        f"Do NOT make up information not in the documents. "
+        f"If you cannot find the answer in the documents, politely say you don't have that information. "
+        f"Keep responses under 30 words. Ask one question at a time.\n\n"
+        f"Company Context:\n{context}\n\n"
+        f"Contact name: {contact_name}"
+    )
+    state["system_prompt"] = system_prompt
+
+    # Generate initial greeting
+    greeting_prompt = f"Generate a brief greeting and introduction for calling {contact_name}. Ask how they are doing."
+    greeting = generate_response(system_prompt, greeting_prompt)
+    if not greeting:
+        greeting = f"Hello {contact_name}, this is a call from {company_name}. How are you today?"
+
+    # Determine language for TTS
+    tts_language = "hi" if contact_language in ["hindi", "hi"] else "en"
+
+    twiml = build_voice_twiml(greeting, tts_language, company_name)
+
+    # Update call log
+    supabase.table("call_logs").update({
+        "status": "in-progress",
+        "started_at": datetime.utcnow().isoformat(),
+    }).eq("twilio_call_sid", call_sid).execute()
+
+    state["transcript"].append({"role": "assistant", "content": greeting})
+
+    return PlainTextResponse(str(twiml), media_type="text/xml")
+
+
+@router.post("/gather")
+async def gather_webhook(request: Request):
+    """Twilio webhook for processing gathered speech input."""
+    form_data = await request.form()
+    call_sid = form_data.get("CallSid", "")
+    speech_result = form_data.get("SpeechResult", "")
+
+    state = _call_state.get(call_sid)
+    if not state:
+        return PlainTextResponse(str(end_call_twiml()), media_type="text/xml")
+
+    if state.get("conversation_ended"):
+        return PlainTextResponse(str(end_call_twiml("Thank you for your time. Goodbye!")), media_type="text/xml")
+
+    # Add to transcript
+    state["transcript"].append({"role": "user", "content": speech_result})
+    state["turn_count"] += 1
+
+    # Detect sentiment
+    sentiment = detect_sentiment(speech_result)
+    state["sentiment_history"].append(sentiment)
+
+    # Check for escalation
+    if detect_escalation(speech_result):
+        state["conversation_ended"] = True
+        update_call_log(call_sid, state)
+        twiml = end_call_twiml(
+            "I'm connecting you to a human agent. Please hold. Thank you.",
+            state.get("contact_language", "en"),
         )
-        return Response(content=_build_twiml(twiml_body), media_type="application/xml")
-    else:
-        # OTP failed — check attempts, max 3
-        result = supabase.table("verification_sessions") \
-            .select("attempts") \
-            .eq("phone", phone) \
-            .eq("company_id", company_id) \
-            .order("created_at", desc=True) \
-            .limit(1) \
-            .execute()
-        attempts = 1
-        if result.data and result.data[0].get("attempts"):
-            attempts = result.data[0]["attempts"] + 1
+        return PlainTextResponse(str(twiml), media_type="text/xml")
 
-        if attempts >= 3:
-            await vs.lock_customer(company_id, phone)
-            twiml_body = (
-                '<Say language="hi-IN">'
-                'Teen asafal prayas. Main aapko hamari support team se connect kar rahi hoon. Kripya pratiksha karein.'
-                '</Say>'
-            )
-            return Response(content=_build_twiml(twiml_body), media_type="application/xml")
+    # Build context for AI response
+    context = {"company_name": "", "industry": ""}
+    if state.get("company_id"):
+        company = supabase.table("companies").select("name,industry").eq("id", state["company_id"]).single().execute()
+        if company.data:
+            context = company.data
 
-        # Update attempts
-        supabase.table("verification_sessions") \
-            .update({"attempts": attempts}) \
-            .eq("phone", phone) \
-            .eq("company_id", company_id) \
-            .execute()
+    system_prompt = state.get("system_prompt", "You are a professional AI calling agent.")
 
-        otp_url = f"{settings.PUBLIC_BASE_URL}/api/voice/verify-otp?company_id={company_id}&phone={phone}"
-        remaining = 3 - attempts
-        twiml_body = (
-            f'<Say language="hi-IN">Galat OTP. Kripya dobara OTP bataayein. Aapke paas {remaining} aur mauke hain.</Say>'
-            f'<Gather input="speech" action="{otp_url}" '
-            f'speechTimeout="auto" language="hi-IN" timeout="15">'
-            f'</Gather>'
-        )
-        return Response(content=_build_twiml(twiml_body), media_type="application/xml")
-
-
-@router.post("/handle-speech", response_class=Response)
-async def handle_speech(
-    CallSid: str = Form(...),
-    SpeechResult: str = Form(default=""),
-    Confidence: float = Form(default=0.0),
-    company_id: str | None = Query(default=None),
-    From: str = Form(default=""),
-):
-    """Handle customer speech input from Twilio Gather.
-
-    Features:
-    - Wrong number detection -> mark contact invalid
-    - Callback request detection -> schedule follow-up call
-    - Smart timing -> store best call time after successful interaction
-    - Full context from customer profile (if verification was done)
-    """
-    if not SpeechResult.strip():
-        gather_url = f"{settings.PUBLIC_BASE_URL}/api/voice/handle-speech"
-        if company_id:
-            gather_url += f"?company_id={company_id}"
-        twiml_body = (
-            '<Say language="hi-IN">Kya aap kuch poochhna chahenge?</Say>'
-            f'<Gather input="speech" action="{gather_url}" '
-            f'speechTimeout="auto" language="hi-IN" timeout="15">'
-            f'</Gather>'
-        )
-        return Response(
-            content=_build_twiml(twiml_body),
-            media_type="application/xml",
-        )
-
-    call_log = get_call_log_by_sid(CallSid)
-    resolved_company_id = company_id
-
-    company_name = "CallPilot AI"
-    if resolved_company_id:
-        company = get_company(resolved_company_id)
-        if company:
-            company_name = company.get("name", "CallPilot AI")
-
-    # Update transcript
-    if call_log:
-        existing = call_log.get("transcript") or ""
-        updated_transcript = f"{existing}\nCustomer: {SpeechResult}"
-        update_call_log(CallSid, {"transcript": updated_transcript})
-
-    # ─── Wrong Number Detection ─────────────────────────────────────────
-    if _is_wrong_number(SpeechResult):
-        # Get contact_id from call_log
-        contact_id = call_log.get("contact_id") if call_log else None
-        campaign_id = call_log.get("campaign_id") if call_log else None
-
-        if contact_id:
-            mark_contact_invalid(contact_id, "wrong_number")
-        if campaign_id:
-            increment_campaign_invalid(campaign_id)
-
-        update_call_log(CallSid, {"outcome": "invalid"})
-        return Response(
-            content=_build_twiml(
-                '<Say language="hi-IN">'
-                'Maaf karein, galat number. Aapka din shubh ho. Namaste.'
-                '</Say><Hangup/>'
-            ),
-            media_type="application/xml",
-        )
-
-    # ─── Callback Request Detection ─────────────────────────────────────
-    callback_detected = _detect_callback_request(SpeechResult)
-    if callback_detected:
-        contact_id = call_log.get("contact_id") if call_log else None
-        campaign_id = call_log.get("campaign_id") if call_log else None
-
-        if contact_id and campaign_id:
-            contact = supabase.table("contacts").select("phone").eq("id", contact_id).maybe_single().execute()
-            phone = contact.data.get("phone") if contact and contact.data else None
-            if phone:
-                next_retry_at = _get_next_retry_time(0)
-                _schedule_callback(contact_id, phone, campaign_id, next_retry_at)
-                if call_log:
-                    mark_call_log_callback(CallSid, next_retry_at)
-
-        return Response(
-            content=_build_twiml(
-                '<Say language="hi-IN">'
-                'Theek hai! Main aapko dobara call karunga.'
-                ' Aapke samay ke liye dhanyavaad. Namaste.'
-                '</Say><Hangup/>'
-            ),
-            media_type="application/xml",
-        )
-
-    # ─── Check for escalation ───────────────────────────────────────────
-    if detect_escalation(SpeechResult):
-        update_call_log(CallSid, {"outcome": "escalate"})
-        return Response(
-            content=_build_twiml(
-                '<Say language="hi-IN">'
-                'Main aapko ek human agent se connect kar rahi hoon. Kripya kuch der pratiksha karein.'
-                '</Say>'
-            ),
-            media_type="application/xml",
-        )
-
-    # ─── Build customer context from verification if available ────────
-    customer_context = ""
-    if resolved_company_id:
-        # Try to get verified customer profile from speech or call logs
-        try:
-            vs = VerificationService()
-            # Try to find customer by phone if they verified
-            phone_digits = "".join(filter(str.isdigit, From))
-            if len(phone_digits) >= 10:
-                phone = phone_digits[-10:]
-                profile = await vs.get_customer_profile(resolved_company_id, phone)
-                if profile:
-                    customer_context = f"""CUSTOMER PROFILE:
-Name: {profile.get('name', 'N/A')}
-VIP: {'Yes' if profile.get('is_vip') else 'No'}
-Outstanding Dues: ₹{profile.get('outstanding_dues', 0)}
-KYC Status: {profile.get('kyc_status', 'N/A')}
-Customer ID: {profile.get('customer_id', 'N/A')}
-"""
-                    if profile.get('open_tickets'):
-                        tickets = profile.get('open_tickets', [])
-                        customer_context += f"Open Tickets: {len(tickets)}\n"
-        except Exception:
-            pass
-
-    # ─── RAG Pipeline ──────────────────────────────────────────────────
-    try:
-        query_embedding = get_embedding(SpeechResult)
-
-        if resolved_company_id:
-            chunks = match_chunks(query_embedding, resolved_company_id, match_count=5)
-        else:
-            chunks = []
-
-        rag_context = build_rag_context(chunks) if chunks else "No specific knowledge found."
-
-        # Include recent transcript so the AI knows the conversation history
-        recent_history = ""
-        if call_log:
-            transcript = call_log.get("transcript") or ""
-            if transcript:
-                # Take last ~5 lines of transcript for context
-                lines = transcript.split("\n")
-                recent_history = "\n".join(lines[-10:])
-
-        system_prompt = f"""You are a calling agent for {company_name}.
-
-Your entire knowledge comes ONLY from the
-company document excerpts provided below.
-
-{customer_context}
-
-STRICT RULES — NEVER BREAK THESE:
-1. LANGUAGE: First detect the customer's language (Hindi, Hinglish,
-   Kannada, or English). Then respond in EXACTLY that language.
-   NEVER switch languages mid-conversation. Match their language precisely.
-2. Answer ONLY using the CONTEXT below. Nothing else.
-3. If the answer is NOT in the context -> say exactly:
-   "Iske baare mein main aapko hamare team se connect karunga.
-    Kya aap callback ke liye available rahenge?"
-4. NEVER use your own training knowledge.
-5. NEVER make up prices, dates, names, or policies.
-6. APPOINTMENT BOOKING — This is VERY IMPORTANT:
-   - If customer asks to book an appointment ("Mujhe appointment chahiye",
-     "kal 4 baje", "appointment lena hai", etc.), ask them to confirm
-     the date and time.
-   - When the customer CONFIRMS the appointment, end your response with
-     this EXACT format on a new line (do NOT include in spoken text):
-     [APPOINTMENT: name=<customer_name>, date=YYYY-MM-DD, time=HH:MM]
-     Use the customer's name from context or the conversation.
-   - If they don't confirm, do NOT add the marker.
-7. If customer says not interested -> politely end:
-   "Theek hai, aapka samay dene ke liye shukriya. Namaste."
-8. If customer is interested -> say:
-   "Bahut accha! Main aapke liye ek team member se callback arrange karta hoon."
-9. VIP customers must be handled with priority.
-
-COMPANY DOCUMENT CONTEXT:
-{rag_context}
-
-RECENT CONVERSATION HISTORY (for context):
-{recent_history}
-
-If CONTEXT is empty or does not contain relevant information,
-immediately escalate."""
-        user_prompt = f"Customer said: {SpeechResult}"
-        ai_response = generate_response(system_prompt, user_prompt, max_tokens=500)
-
-        # ─── Smart Timing Learning ─────────────────────────────────────
-        # If call is going well (we got a meaningful response), store best time
-        if call_log:
-            contact_id = call_log.get("contact_id")
-            if contact_id and len(SpeechResult) > 10:
-                now_utc = datetime.now(timezone.utc)
-                ist_dt = now_utc + timedelta(hours=5, minutes=30)
-                best_time_str = f"{ist_dt.hour:02d}:{ist_dt.minute:02d}"
-                # Only update if no best time exists yet
-                contact_data = supabase.table("contacts").select("best_call_time").eq("id", contact_id).maybe_single().execute()
-                if contact_data and contact_data.data and not contact_data.data.get("best_call_time"):
-                    update_contact_best_time(contact_id, best_time_str)
-
-    except Exception as e:
-        print(f"HANDLE_SPEECH ERROR: {type(e).__name__}: {e}", file=sys.stderr)
-        ai_response = (
-            "Maaf karein, main abhi aapki madad nahi kar pa rahi hoon. "
-            "Kripya kuch der mein dobara prayas karein."
-        )
-
-    # ─── Appointment Booking Extraction ────────────────────────────────
-    # Check if the AI booked an appointment and parse the marker
-    spoken_response = ai_response
-    appointment_data = _parse_appointment_marker(ai_response)
-    if appointment_data:
-        # Strip the marker from the spoken response
-        spoken_response = APPOINTMENT_PATTERN.sub("", ai_response).strip()
-
-        # Get caller info from call_log
-        call_log_id = call_log["id"] if call_log else None
-        contact_id = call_log.get("contact_id") if call_log else None
-        customer_phone = ""
-
-        # Try to get the phone number from contact or caller ID
-        if contact_id:
-            try:
-                contact_res = supabase.table("contacts").select("phone, name").eq("id", contact_id).maybe_single().execute()
-                if contact_res and contact_res.data:
-                    customer_phone = contact_res.data.get("phone", "")
-                    # Use contact name if AI didn't provide one
-                    if not appointment_data["name"] or appointment_data["name"] == "Patient":
-                        appointment_data["name"] = contact_res.data.get("name", "Customer")
-            except Exception:
-                pass
-
-        if not customer_phone:
-            # Fall back to the From number from call_log
-            customer_phone = ""  # We don't have caller ID in call_log directly
-
-        # Store the appointment
-        if resolved_company_id:
-            created = create_appointment(
-                company_id=resolved_company_id,
-                customer_name=appointment_data["name"],
-                customer_phone=customer_phone,
-                appointment_date=appointment_data["date"],
-                appointment_time=appointment_data["time"],
-                contact_id=contact_id,
-                call_log_id=call_log_id,
-                notes=appointment_data.get("notes", ""),
-            )
-        else:
-            created = None
-        if created:
-            print(f"APPOINTMENT BOOKED: {appointment_data['name']} on {appointment_data['date']} at {appointment_data['time']}")
-
-    # ─── Language Detection & Storage ─────────────────────────────────
-    detected_lang = _detect_language(SpeechResult)
-    if call_log:
-        current_collected = call_log.get("collected_data") or {}
-        if isinstance(current_collected, str):
-            current_collected = {}
-        current_collected["detected_language"] = detected_lang
-        update_call_log(CallSid, {"collected_data": current_collected})
-
-    # Update transcript with AI response (without appointment marker)
-    if call_log:
-        existing = call_log.get("transcript") or ""
-        updated_transcript = f"{existing}\nAssistant: {spoken_response}"
-        update_call_log(CallSid, {"transcript": updated_transcript})
-
-    # Determine the best language code for Twilio's Say verb
-    twilio_lang_map = {
-        "hi-IN": "hi-IN",
-        "kn-IN": "kn-IN",
-        "en-IN": "en-IN",
-    }
-    say_language = twilio_lang_map.get(detected_lang, "hi-IN")
-
-    gather_url = f"{settings.PUBLIC_BASE_URL}/api/voice/handle-speech"
-    if company_id:
-        gather_url += f"?company_id={company_id}"
-
-    twiml_body = (
-        f'<Say language="{say_language}">{spoken_response}</Say>'
-        f'<Gather input="speech" action="{gather_url}" '
-        f'speechTimeout="auto" language="{say_language}" timeout="15">'
-        f'</Gather>'
+    # Generate AI response
+    transcript_text = "\n".join(
+        [f"{'AI' if t['role'] == 'assistant' else 'Customer'}: {t['content']}"
+         for t in state["transcript"][-5:]]  # Last 5 exchanges for context
     )
 
-    return Response(
-        content=_build_twiml(twiml_body),
-        media_type="application/xml",
-    )
+    user_prompt = f"Conversation so far:\n{transcript_text}\n\nRespond to the customer's last message."
+    ai_response = generate_response(system_prompt, user_prompt)
+    if not ai_response:
+        ai_response = "Thank you for sharing that information. Is there anything else you would like to discuss?"
+
+    state["transcript"].append({"role": "assistant", "content": ai_response})
+
+    # Check if call should end
+    if state["turn_count"] >= 20:
+        state["conversation_ended"] = True
+        update_call_log(call_sid, state)
+        twiml = end_call_twiml(
+            "Thank you for your time. We will follow up if needed. Goodbye!",
+            state.get("contact_language", "en"),
+        )
+        return PlainTextResponse(str(twiml), media_type="text/xml")
+
+    tts_language = state.get("contact_language", "en")
+    twiml = build_gather_twiml(ai_response, tts_language)
+    return PlainTextResponse(str(twiml), media_type="text/xml")
 
 
 @router.post("/call-status")
-async def call_status(
-    CallSid: str = Form(...),
-    CallStatus: str = Form(...),
-    CallDuration: str = Form(default="0"),
-):
-    """Twilio call status callback.
+async def call_status_webhook(request: Request):
+    """Twilio webhook for call status updates."""
+    form_data = await request.form()
+    call_sid = form_data.get("CallSid", "")
+    call_status = form_data.get("CallStatus", "")
+    call_duration = float(form_data.get("CallDuration", 0))
 
-    New features:
-    - Retry logic for no-answer/busy (max 3, 2hr apart, calling window)
-    - WhatsApp follow-up marker for missed calls
-    - Campaign completion check with unreachable/invalid counts
-    """
-    duration_sec = 0
-    try:
-        duration_sec = int(CallDuration)
-    except (ValueError, TypeError):
-        pass
+    company_id = form_data.get("company_id", "")
+    campaign_id = form_data.get("campaign_id", "")
+    contact_id = form_data.get("contact_id", "")
 
-    # Update call_log
-    update_call_log(CallSid, {
-        "status": CallStatus,
-        "duration_seconds": duration_sec,
-        "ended_at": datetime.utcnow().isoformat(),
-    })
+    # Update call log
+    update_data = {
+        "status": call_status,
+    }
+    if call_duration > 0:
+        update_data["duration"] = call_duration
+    if call_status in ["completed", "no-answer", "busy", "failed"]:
+        update_data["ended_at"] = datetime.utcnow().isoformat()
 
-    call_log = get_call_log_by_sid(CallSid)
-    if not call_log:
-        return {"success": True}
+    supabase.table("call_logs").update(update_data).eq("twilio_call_sid", call_sid).execute()
 
-    campaign_id = call_log.get("campaign_id")
-    contact_id = call_log.get("contact_id")
+    # Save transcript and generate summary if completed
+    if call_status == "completed" and call_duration > 5:
+        state = _call_state.get(call_sid)
+        if state and state.get("transcript"):
+            # Save transcript
+            supabase.table("call_logs").update({
+                "transcript": json.dumps(state["transcript"]),
+                "sentiment_score": sum(state["sentiment_history"]) / len(state["sentiment_history"]) if state["sentiment_history"] else 0.5,
+            }).eq("twilio_call_sid", call_sid).execute()
 
-    # ─── Update campaign counters ──────────────────────────────────────
-    if campaign_id and CallStatus in ("completed", "failed", "no-answer", "busy"):
-        increment_campaign_called(campaign_id)
-        if CallStatus == "completed":
-            increment_campaign_connected(campaign_id)
+            # Generate summary
+            summary = generate_transcript_summary(state["transcript"])
+            if summary:
+                supabase.table("call_logs").update({"notes": summary}).eq("twilio_call_sid", call_sid).execute()
 
-    # ─── Retry Logic for No-Answer / Busy ──────────────────────────────
-    if CallStatus in ("no-answer", "busy") and contact_id and campaign_id:
-        # Get current retry count
-        contact = supabase.table("contacts").select("retry_count, phone").eq("id", contact_id).maybe_single().execute()
-        if contact and contact.data:
-            current_retry = contact.data.get("retry_count") or 0
-            phone = contact.data.get("phone", "")
+        # Update last_called on contact
+        if contact_id:
+            supabase.table("contacts").update({
+                "last_called": datetime.utcnow().isoformat(),
+                "verified": True,
+            }).eq("id", contact_id).execute()
 
-            if current_retry < MAX_RETRIES:
-                # Schedule retry in 2 hours
-                _schedule_retry_call(contact_id, phone, campaign_id, current_retry + 1)
-                # Mark WhatsApp follow-up as pending for missed calls
-                mark_call_log_whatsapp_pending(CallSid)
-            else:
-                # Max retries reached - mark as unreachable
-                update_contact_retry(contact_id, current_retry, None, "unreachable")
-                increment_campaign_unreachable(campaign_id)
+    # Update campaign counters
+    MAX_RETRIES = 3
 
-        # Check if campaign should complete
-        _check_campaign_completion(campaign_id)
+    if campaign_id:
+        if call_status == "completed" and call_duration > 5:
+            increment_campaign_counter(campaign_id, "connected")
+        elif call_status in ["no-answer", "busy", "failed"]:
+            log = supabase.table("call_logs").select("retry_count").eq("twilio_call_sid", call_sid).single().execute()
+            retry_count = (log.data.get("retry_count", 0) if log.data else 0) + 1
+            supabase.table("call_logs").update({"retry_count": retry_count}).eq("twilio_call_sid", call_sid).execute()
 
-    elif CallStatus == "completed" and contact_id:
-        # ─── Update contact status to 'called' on success ──────────────
-        update_contact_status(contact_id, "called")
+            if retry_count >= MAX_RETRIES:
+                increment_campaign_counter(campaign_id, "unreachable")
 
-        # Check campaign completion
-        if campaign_id:
-            _check_campaign_completion(campaign_id)
+        check_campaign_completion(campaign_id)
 
-    elif CallStatus == "failed" and contact_id:
-        # Failed calls - schedule retry (same as no-answer)
-        if campaign_id:
-            contact = supabase.table("contacts").select("retry_count, phone").eq("id", contact_id).maybe_single().execute()
-            if contact and contact.data:
-                current_retry = contact.data.get("retry_count") or 0
-                phone = contact.data.get("phone", "")
-
-                if current_retry < MAX_RETRIES:
-                    _schedule_retry_call(contact_id, phone, campaign_id, current_retry + 1)
-                else:
-                    update_contact_retry(contact_id, current_retry, None, "unreachable")
-                    increment_campaign_unreachable(campaign_id)
-
-                _check_campaign_completion(campaign_id)
+    # Cleanup state
+    _call_state.pop(call_sid, None)
 
     return {"success": True}
 
 
-def _check_campaign_completion(campaign_id: str) -> None:
-    """Check if campaign is complete by summing unique terminal outcomes.
+@router.post("/incoming-call")
+async def incoming_call_webhook(request: Request):
+    """Twilio webhook for incoming calls."""
+    form_data = await request.form()
+    call_sid = form_data.get("CallSid", "")
+    from_number = form_data.get("From", "")
+    to_number = form_data.get("To", "")
 
-    Uses three counters that are mutually exclusive per contact:
-    - connected: contact answered at least once
-    - unreachable: contact exhausted all retries
-    - invalid_count: contact was wrong number / DND
+    # Find company by Twilio phone number
+    company = supabase.table("companies").select("*").eq("twilio_phone_number", to_number).single().execute()
+    if not company.data:
+        twiml = end_call_twiml("Thank you for calling. Goodbye.")
+        return PlainTextResponse(str(twiml), media_type="text/xml")
 
-    `called` is NOT used because it's incremented per attempt (including
-    retries), so it would trigger completion before retries execute.
+    company_id = company.data["id"]
+    company_name = company.data["name"]
+    industry = company.data["industry"]
 
-    Fallback: If counters don't match, also check actual contact states
-    in the database. This catches edge cases where scheduler jobs were
-    lost on restart and contacts are stuck in "queued" state.
-    """
+    # Create call log
+    supabase.table("call_logs").insert({
+        "company_id": company_id,
+        "contact_phone": from_number,
+        "caller_phone": to_number,
+        "status": "in-progress",
+        "direction": "inbound",
+        "started_at": datetime.utcnow().isoformat(),
+    }).execute()
+
+    # Get after-hours message
+    after_hours = company.data.get("after_hours_message", "")
+
+    # Generate greeting
+    greeting = (
+        f"Thank you for calling {company_name}. This is your AI assistant. "
+        f"How can I help you today?"
+    )
+
+    state = _get_or_create_state(call_sid, company_id)
+    state["system_prompt"] = (
+        f"You are a professional AI receptionist for {company_name}, a {industry} company. "
+        f"Answer calls politely and help customers with their queries. "
+        f"Keep responses concise and professional."
+    )
+
+    twiml = build_voice_twiml(greeting, "en", company_name)
+    return PlainTextResponse(str(twiml), media_type="text/xml")
+
+
+def update_call_log(call_sid: str, state: dict):
+    """Update call log with transcript data."""
     try:
-        campaign = get_campaign(campaign_id)
-        if not campaign:
-            return
+        transcript = state.get("transcript", [])
+        sentiment_scores = state.get("sentiment_history", [])
+        avg_sentiment = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 0.5
 
-        total = campaign.get("total_contacts", 0)
-        if total <= 0:
-            return
-
-        connected = campaign.get("connected", 0) or 0
-        unreachable = campaign.get("unreachable", 0) or 0
-        invalid_count = campaign.get("invalid_count", 0) or 0
-
-        finalized = connected + unreachable + invalid_count
-
-        if finalized >= total:
-            if campaign.get("status") not in ("completed", "failed"):
-                update_campaign_status(campaign_id, "completed")
-            return
-
-        # Fallback: Check actual contact states in DB
-        # Count contacts that are in terminal states vs still pending/queued
-        try:
-            all_contacts = supabase.table("contacts") \
-                .select("id, status") \
-                .eq("campaign_id", campaign_id) \
-                .execute()
-
-            terminal_statuses = {"called", "unreachable", "invalid"}
-            terminal = sum(1 for c in (all_contacts.data or []) if c.get("status") in terminal_statuses)
-            limbo = sum(1 for c in (all_contacts.data or []) if c.get("status") in ("pending", "queued"))
-
-            # If all contacts are in terminal states, complete the campaign
-            if terminal >= total:
-                update_campaign_status(campaign_id, "completed")
-                return
-
-            # If contacts are stuck in limbo for too long (no pending scheduler jobs),
-            # check if campaign launched > 24h ago and no progress
-            if limbo > 0 and connected == 0:
-                launched_at = campaign.get("launched_at")
-                if launched_at:
-                    try:
-                        launched = datetime.fromisoformat(launched_at.replace("Z", "+00:00"))
-                        hours_elapsed = (datetime.now(timezone.utc) - launched).total_seconds() / 3600
-                        if hours_elapsed > 24:
-                            # Auto-mark stale queued contacts as unreachable
-                            for c in (all_contacts.data or []):
-                                if c.get("status") in ("pending", "queued"):
-                                    supabase.table("contacts").update({
-                                        "status": "unreachable",
-                                    }).eq("campaign_id", campaign_id).eq("id", c.get("id")).execute()
-                                    increment_campaign_unreachable(campaign_id)
-
-                            update_campaign_status(campaign_id, "completed")
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-    except Exception:
-        pass
+        supabase.table("call_logs").update({
+            "transcript": json.dumps(transcript),
+            "sentiment_score": avg_sentiment,
+        }).eq("twilio_call_sid", call_sid).execute()
+    except Exception as e:
+        logger.error(f"Error updating call log: {e}")

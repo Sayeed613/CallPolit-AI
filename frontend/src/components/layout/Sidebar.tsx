@@ -1,180 +1,165 @@
-import React, { useState } from 'react'
-import { NavLink } from 'react-router-dom'
-import { motion, AnimatePresence } from 'framer-motion'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { AnimatePresence, motion } from 'framer-motion'
 import {
-  LayoutDashboard, Radio, Megaphone, Users, BarChart3, FileText,
-  Calendar, Settings, ChevronLeft, Phone, LogOut, Bell,
-  Menu,
+  LayoutDashboard,
+  Radio,
+  Megaphone,
+  Users,
+  BarChart2,
+  FileText,
+  Calendar,
+  Settings2,
+  ChevronLeft,
+  Phone,
+  LogOut,
+  Bell,
+  ChevronDown,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
-import { useAuthStore } from '../../stores/authStore'
-import { useCompanyStore } from '../../stores/companyStore'
-import { useCallStore } from '../../stores/callStore'
+import useUIStore from '../../stores/uiStore'
+import useAuthStore from '../../stores/authStore'
+import useCompanyStore from '../../stores/companyStore'
+import useCallStore from '../../stores/callStore'
 
 const navItems = [
-  { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
-  { label: 'Live Calls', path: '/live', icon: Radio, badge: true },
-  { label: 'Campaigns', path: '/campaigns', icon: Megaphone },
-  { label: 'Contacts', path: '/contacts', icon: Users },
-  { label: 'Analytics', path: '/analytics', icon: BarChart3 },
-  { label: 'Documents', path: '/documents', icon: FileText },
-  { label: 'Appointments', path: '/appointments', icon: Calendar },
-  { label: 'Settings', path: '/settings', icon: Settings },
+  { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { path: '/live', label: 'Live Calls', icon: Radio, live: true },
+  { path: '/campaigns', label: 'Campaigns', icon: Megaphone },
+  { path: '/contacts', label: 'Contacts', icon: Users },
+  { path: '/analytics', label: 'Analytics', icon: BarChart2 },
+  { path: '/documents', label: 'Documents', icon: FileText },
+  { path: '/appointments', label: 'Appointments', icon: Calendar },
+  { path: '/settings', label: 'Settings', icon: Settings2 },
 ]
 
-interface SidebarProps {
-  collapsed: boolean
-  onToggle: () => void
-  mobileOpen?: boolean
-  onMobileClose?: () => void
-}
-
-export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose }: SidebarProps) {
-  const [showMobile, setShowMobile] = useState(false)
+export function Sidebar() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const { sidebarCollapsed, toggleSidebar } = useUIStore()
   const { signOut } = useAuthStore()
-  const { activeCompany } = useCompanyStore()
+  const { company } = useCompanyStore()
   const { activeCalls } = useCallStore()
 
-  const handleSignOut = () => {
-    signOut()
-  }
+  const activeCallsCount = activeCalls.length
 
-  const sidebarContent = (
-    <div className="flex flex-col h-full">
+  return (
+    <aside
+      className={cn(
+        'fixed left-0 top-0 h-full bg-bg-surface border-r border-border-subtle z-40 flex flex-col transition-all duration-200',
+        sidebarCollapsed ? 'w-14' : 'w-64',
+      )}
+      style={{ transitionTimingFunction: 'cubic-bezier(0.4, 0, 0.2, 1)' }}
+    >
       {/* Logo */}
-      <div className={cn('flex items-center h-16 px-5 border-b border-surface-border', collapsed ? 'justify-center' : 'justify-between')}>
-        {!collapsed && (
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-accent-500 flex items-center justify-center">
-              <Phone className="w-4 h-4 text-white" />
-            </div>
-            <div>
-              <span className="text-sm font-semibold text-white">CallPilot</span>
-              <span className="text-[10px] font-medium text-brand-400 block -mt-0.5">AI</span>
-            </div>
+      <div className={cn('flex items-center h-14 border-b border-border-subtle px-4', sidebarCollapsed && 'justify-center')}>
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center flex-shrink-0">
+            <Phone size={16} className="text-white" />
           </div>
-        )}
-        {collapsed && (
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-accent-500 flex items-center justify-center">
-            <Phone className="w-4 h-4 text-white" />
-          </div>
-        )}
-        <button
-          onClick={onToggle}
-          className={cn(
-            'p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-surface-hover transition-colors',
-            collapsed && 'hidden'
-          )}
-        >
-          <ChevronLeft className="w-4 h-4" />
-        </button>
+          <AnimatePresence>
+            {!sidebarCollapsed && (
+              <motion.span
+                initial={{ opacity: 0, width: 0 }}
+                animate={{ opacity: 1, width: 'auto' }}
+                exit={{ opacity: 0, width: 0 }}
+                className="text-sm font-semibold text-text-primary whitespace-nowrap overflow-hidden"
+              >
+                CallPilot
+              </motion.span>
+            )}
+          </AnimatePresence>
+        </div>
       </div>
 
-      {/* Company name */}
-      {!collapsed && activeCompany && (
-        <div className="px-5 py-3 border-b border-surface-border">
-          <p className="text-xs text-zinc-500">Company</p>
-          <p className="text-sm font-medium text-white truncate">{activeCompany.name}</p>
+      {/* Company */}
+      {!sidebarCollapsed && company && (
+        <div className="px-3 py-3 border-b border-border-subtle">
+          <button className="flex items-center gap-2 w-full px-2 py-1.5 rounded-lg hover:bg-bg-elevated transition-colors text-left">
+            <div className="w-6 h-6 rounded-md bg-brand-500/20 flex items-center justify-center flex-shrink-0">
+              <span className="text-xs font-medium text-brand-400">{company.name[0]}</span>
+            </div>
+            <span className="text-xs font-medium text-text-primary truncate flex-1">{company.name}</span>
+            <ChevronDown size={12} className="text-text-tertiary" />
+          </button>
         </div>
       )}
 
       {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+      <nav className="flex-1 py-3 overflow-y-auto">
         {navItems.map((item) => {
-          const Icon = item.icon
           const isActive = location.pathname.startsWith(item.path)
+          const Icon = item.icon
+
           return (
-            <NavLink
+            <button
               key={item.path}
-              to={item.path}
-              onClick={() => onMobileClose?.()}
-              className={({ isActive }) =>
-                cn(
-                  'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group',
-                  isActive
-                    ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20'
-                    : 'text-zinc-400 hover:text-white hover:bg-surface-hover border border-transparent',
-                  collapsed && 'justify-center px-2'
-                )
-              }
+              onClick={() => navigate(item.path)}
+              className={cn(
+                'relative flex items-center gap-3 w-full px-3 py-2.5 text-sm transition-all duration-150',
+                sidebarCollapsed ? 'justify-center' : 'px-4',
+                isActive
+                  ? 'text-brand-400 bg-brand-500/8'
+                  : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-elevated',
+              )}
+              title={sidebarCollapsed ? item.label : undefined}
             >
-              <div className="relative">
-                <Icon className="w-5 h-5" />
-                {item.badge && activeCalls.length > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-success rounded-full animate-ping-slow" />
+              {isActive && (
+                <motion.div
+                  layoutId="sidebar-active"
+                  className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-brand-400 rounded-full"
+                />
+              )}
+              <div className="relative flex-shrink-0">
+                <Icon size={18} />
+                {item.live && activeCallsCount > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-success rounded-full pulse-dot" />
                 )}
               </div>
-              {!collapsed && (
-                <>
-                  <span className="flex-1">{item.label}</span>
-                  {item.badge && activeCalls.length > 0 && (
-                    <span className="w-2 h-2 rounded-full bg-success" />
-                  )}
-                </>
+              {!sidebarCollapsed && <span className="truncate">{item.label}</span>}
+              {item.live && activeCallsCount > 0 && !sidebarCollapsed && (
+                <span className="ml-auto text-xs text-success font-medium">{activeCallsCount}</span>
               )}
-            </NavLink>
+            </button>
           )
         })}
       </nav>
 
       {/* Bottom actions */}
-      <div className={cn('px-3 py-4 border-t border-surface-border space-y-1', collapsed && 'flex flex-col items-center')}>
-        <button className={cn(
-          'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-zinc-400 hover:text-white hover:bg-surface-hover transition-colors w-full',
-          collapsed && 'justify-center px-2'
-        )}>
-          <Bell className="w-5 h-5" />
-          {!collapsed && <span>Notifications</span>}
-        </button>
+      <div className={cn('border-t border-border-subtle py-3', sidebarCollapsed ? 'px-2' : 'px-3')}>
+        {!sidebarCollapsed && (
+          <button className="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm text-text-tertiary hover:text-text-secondary hover:bg-bg-elevated transition-colors">
+            <Bell size={16} />
+            <span>Notifications</span>
+          </button>
+        )}
         <button
-          onClick={handleSignOut}
+          onClick={() => signOut()}
           className={cn(
-            'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-zinc-400 hover:text-error hover:bg-error/10 transition-colors w-full',
-            collapsed && 'justify-center px-2'
+            'flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm text-text-tertiary hover:text-error hover:bg-error/5 transition-colors',
+            sidebarCollapsed && 'justify-center',
           )}
+          title="Sign out"
         >
-          <LogOut className="w-5 h-5" />
-          {!collapsed && <span>Sign Out</span>}
+          <LogOut size={16} />
+          {!sidebarCollapsed && <span>Sign out</span>}
         </button>
       </div>
-    </div>
-  )
 
-  return (
-    <>
-      {/* Desktop sidebar */}
-      <aside
+      {/* Collapse button */}
+      <button
+        onClick={toggleSidebar}
         className={cn(
-          'hidden lg:flex flex-col fixed left-0 top-0 h-full bg-surface-secondary border-r border-surface-border z-30 transition-all duration-300',
-          collapsed ? 'w-16' : 'w-64'
+          'absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 bg-bg-card border border-border-default rounded-full flex items-center justify-center hover:bg-bg-elevated transition-colors z-10',
+          'hidden md:flex',
         )}
       >
-        {sidebarContent}
-      </aside>
-
-      {/* Mobile sidebar */}
-      <AnimatePresence>
-        {mobileOpen && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 lg:hidden"
-              onClick={() => onMobileClose?.()}
-            />
-            <motion.aside
-              initial={{ x: -300 }}
-              animate={{ x: 0 }}
-              exit={{ x: -300 }}
-              transition={{ type: 'spring', damping: 25 }}
-              className="fixed left-0 top-0 h-full w-64 bg-surface-secondary border-r border-surface-border z-50 lg:hidden"
-            >
-              {sidebarContent}
-            </motion.aside>
-          </>
-        )}
-      </AnimatePresence>
-    </>
+        <ChevronLeft
+          size={14}
+          className={cn('text-text-tertiary transition-transform duration-200', sidebarCollapsed && 'rotate-180')}
+        />
+      </button>
+    </aside>
   )
 }
+
+export default Sidebar

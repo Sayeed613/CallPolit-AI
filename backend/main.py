@@ -1,41 +1,103 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from routers.health import router as health_router
-from routers.documents import router as documents_router
-from routers.contacts import router as contacts_router
-from routers.campaign import router as campaign_router
-from routers.voice import router as voice_router
-from routers.company import router as company_router
-from routers.appointments import router as appointments_router
-from routers.verification import router as verification_router
-from routers.live import router as live_router
+import os
+import time
+import json
+import logging
+from datetime import datetime
 
-app = FastAPI(
-    title="CallPilot AI Backend",
-    version="1.0.0",
-    description="AI-powered inbound & outbound voice support platform for Indian businesses",
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+
+from routers import (
+    health,
+    company,
+    contacts,
+    documents,
+    campaign,
+    voice,
+    verification,
+    appointments,
+    live,
+    analytics,
 )
 
-# CORS — allow all origins for development
+load_dotenv()
+
+# ─── Sentry ──────────────────────────────────────────────────────
+sentry_sdk.init(
+    dsn=os.getenv("SENTRY_DSN", ""),
+    integrations=[FastApiIntegration()],
+    traces_sample_rate=0.1,
+    environment=os.getenv("ENVIRONMENT", "development"),
+)
+
+# ─── Structured JSON Logging ─────────────────────────────────────
+class JSONFormatter(logging.Formatter):
+    def format(self, record):
+        return json.dumps({
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "level": record.levelname,
+            "message": record.getMessage(),
+            "module": record.module,
+            "line": record.lineno,
+        })
+
+logging.basicConfig(level=logging.INFO)
+for handler in logging.root.handlers:
+    handler.setFormatter(JSONFormatter())
+
+logger = logging.getLogger(__name__)
+
+# ─── Rate Limiting ───────────────────────────────────────────────
+limiter = Limiter(key_func=get_remote_address)
+
+# ─── FastAPI App ─────────────────────────────────────────────────
+app = FastAPI(title="CallPilot AI", version="1.0.0")
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# ─── CORS ────────────────────────────────────────────────────────
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(health_router)
-app.include_router(documents_router)
-app.include_router(contacts_router)
-app.include_router(campaign_router)
-app.include_router(voice_router)
-app.include_router(company_router)
-app.include_router(appointments_router)
-app.include_router(verification_router)
-app.include_router(live_router)
+# ─── Request Logging Middleware ──────────────────────────────────
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.time()
+    response = await call_next(request)
+    duration = time.time() - start
+    logger.info(
+        f"{request.method} {request.url.path} {response.status_code} {duration:.3f}s"
+    )
+    return response
 
-
+# ─── Root Health Check ───────────────────────────────────────────
 @app.get("/")
 async def root():
-    return {"message": "CallPilot AI Backend Running"}
+    return {"status": "ok", "service": "CallPilot AI", "version": "1.0.0"}
+
+# ─── Include Routers ─────────────────────────────────────────────
+app.include_router(health.router, prefix="/api", tags=["Health"])
+app.include_router(company.router, prefix="/api/company", tags=["Company"])
+app.include_router(contacts.router, prefix="/api/contacts", tags=["Contacts"])
+app.include_router(documents.router, prefix="/api/documents", tags=["Documents"])
+app.include_router(campaign.router, prefix="/api/campaign", tags=["Campaigns"])
+app.include_router(voice.router, prefix="/api/voice", tags=["Voice"])
+app.include_router(verification.router, prefix="/api/verification", tags=["Verification"])
+app.include_router(appointments.router, prefix="/api/appointments", tags=["Appointments"])
+app.include_router(live.router, prefix="/api/live", tags=["Live"])
+app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])

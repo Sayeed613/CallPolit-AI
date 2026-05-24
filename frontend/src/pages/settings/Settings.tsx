@@ -1,36 +1,35 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Button } from '../../components/ui/Button'
-import { Input } from '../../components/ui/Input'
-import { Select } from '../../components/ui/Select'
-import { Switch } from '../../components/ui/Switch'
-import { Card } from '../../components/ui/Card'
-import { Tabs } from '../../components/ui/Tabs'
-import { Badge } from '../../components/ui/Badge'
-import { PageWrapper } from '../../components/layout/PageWrapper'
-import { useCompanyStore } from '../../stores/companyStore'
-import { api } from '../../lib/api'
+import Button from '../../components/ui/Button'
+import Input from '../../components/ui/Input'
+import Select from '../../components/ui/Select'
+import Card, { CardHeader, CardTitle } from '../../components/ui/Card'
+import Tabs from '../../components/ui/Tabs'
+import Badge from '../../components/ui/Badge'
+import PageWrapper from '../../components/layout/PageWrapper'
+import useCompanyStore from '../../stores/companyStore'
+import { companyApi } from '../../lib/api'
 
 const settingsTabs = [
-  { id: 'company', label: 'Company' },
-  { id: 'verification', label: 'Verification' },
-  { id: 'voice', label: 'Voice & AI' },
-  { id: 'integrations', label: 'Integrations' },
-  { id: 'billing', label: 'Billing' },
+  { value: 'company', label: 'Company' },
+  { value: 'verification', label: 'Verification' },
+  { value: 'voice', label: 'Voice & AI' },
+  { value: 'integrations', label: 'Integrations' },
+  { value: 'billing', label: 'Billing' },
 ]
 
 export function Settings() {
   const { tab } = useParams<{ tab: string }>()
   const navigate = useNavigate()
-  const { activeCompany, updateCompany } = useCompanyStore()
+  const { company, updateCompany } = useCompanyStore()
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
-  const activeTab = tab && settingsTabs.find((t) => t.id === tab) ? tab : 'company'
+  const activeTab = tab && settingsTabs.find((t) => t.value === tab) ? tab : 'company'
 
-  const handleTabChange = (id: string) => {
-    navigate(`/settings/${id}`)
+  const handleTabChange = (value: string) => {
+    navigate(`/settings/${value}`)
   }
 
   const [form, setForm] = useState({
@@ -45,25 +44,25 @@ export function Settings() {
   })
 
   useEffect(() => {
-    if (activeCompany) {
+    if (company) {
       setForm({
-        name: activeCompany.name || '',
-        industry: activeCompany.industry || '',
-        verificationLevel: activeCompany.verification_level || 1,
-        languagePreference: activeCompany.language_preference || 'hi-IN',
-        escalationPhone: activeCompany.escalation_phone || '',
-        businessHoursStart: activeCompany.business_hours_start || '09:00',
-        businessHoursEnd: activeCompany.business_hours_end || '21:00',
-        afterHoursMessage: activeCompany.after_hours_message || '',
+        name: company.name || '',
+        industry: company.industry || '',
+        verificationLevel: company.verification_level || 1,
+        languagePreference: (Array.isArray(company.language_preference) ? company.language_preference[0] : company.language_preference) || 'hi-IN',
+        escalationPhone: company.escalation_phone || '',
+        businessHoursStart: company.business_hours_start || '09:00',
+        businessHoursEnd: company.business_hours_end || '21:00',
+        afterHoursMessage: company.after_hours_message || '',
       })
     }
-  }, [activeCompany])
+  }, [company])
 
   const handleSave = async () => {
     setSaving(true)
     try {
-      if (activeCompany?.id) {
-        await api.company.update(activeCompany.id, form)
+      if (company?.id) {
+        await companyApi.update(company.id, form)
         setSaved(true)
         setTimeout(() => setSaved(false), 2000)
       }
@@ -75,7 +74,14 @@ export function Settings() {
   }
 
   return (
-    <PageWrapper title="Settings" subtitle="Manage your account and preferences">
+    <PageWrapper>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-lg font-semibold text-text-primary">Settings</h2>
+          <p className="text-sm text-text-tertiary">Manage your account and preferences</p>
+        </div>
+      </div>
+
       <Tabs tabs={settingsTabs} activeTab={activeTab} onChange={handleTabChange} className="mb-8" />
 
       <motion.div
@@ -87,12 +93,14 @@ export function Settings() {
         {activeTab === 'company' && (
           <div className="space-y-6">
             <Card className="p-6">
-              <h3 className="mb-4 text-lg font-semibold text-text-primary">Company Information</h3>
+              <CardHeader>
+                <CardTitle>Company Information</CardTitle>
+              </CardHeader>
               <div className="space-y-4">
                 <Input
                   label="Company Name"
                   value={form.name}
-                  onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm((p) => ({ ...p, name: e.target.value }))}
                 />
                 <Select
                   label="Industry"
@@ -107,43 +115,47 @@ export function Settings() {
                     { value: 'general', label: 'General' },
                   ]}
                   value={form.industry}
-                  onChange={(v) => setForm((p) => ({ ...p, industry: v }))}
+                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setForm((p) => ({ ...p, industry: e.target.value }))}
                 />
               </div>
             </Card>
 
             <Card className="p-6">
-              <h3 className="mb-4 text-lg font-semibold text-text-primary">Business Hours</h3>
+              <CardHeader>
+                <CardTitle>Business Hours</CardTitle>
+              </CardHeader>
               <div className="grid grid-cols-2 gap-4">
                 <Input
                   label="Start Time"
                   type="time"
                   value={form.businessHoursStart}
-                  onChange={(e) => setForm((p) => ({ ...p, businessHoursStart: e.target.value }))}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm((p) => ({ ...p, businessHoursStart: e.target.value }))}
                 />
                 <Input
                   label="End Time"
                   type="time"
                   value={form.businessHoursEnd}
-                  onChange={(e) => setForm((p) => ({ ...p, businessHoursEnd: e.target.value }))}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm((p) => ({ ...p, businessHoursEnd: e.target.value }))}
                 />
               </div>
               <div className="mt-4">
                 <Input
                   label="After Hours Message"
                   value={form.afterHoursMessage}
-                  onChange={(e) => setForm((p) => ({ ...p, afterHoursMessage: e.target.value }))}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm((p) => ({ ...p, afterHoursMessage: e.target.value }))}
                   placeholder="We are currently closed. Please call back during business hours."
                 />
               </div>
             </Card>
 
-            <Card className="p-6 border-red-500/20">
-              <h3 className="mb-2 text-lg font-semibold text-red-400">Danger Zone</h3>
-              <p className="mb-4 text-sm text-text-muted">
+            <Card className="border-error/20 p-6">
+              <CardHeader>
+                <CardTitle className="text-error">Danger Zone</CardTitle>
+              </CardHeader>
+              <p className="mb-4 text-sm text-text-tertiary">
                 Permanently delete your company and all associated data.
               </p>
-              <Button variant="secondary" className="border-red-500/30 text-red-400 hover:bg-red-500/10">
+              <Button variant="secondary" className="border-error/30 text-error hover:bg-error/10">
                 Delete Company
               </Button>
             </Card>
@@ -153,7 +165,9 @@ export function Settings() {
         {activeTab === 'verification' && (
           <div className="space-y-6">
             <Card className="p-6">
-              <h3 className="mb-4 text-lg font-semibold text-text-primary">Verification Level</h3>
+              <CardHeader>
+                <CardTitle>Verification Level</CardTitle>
+              </CardHeader>
               <div className="space-y-3">
                 {[
                   { level: 1, label: 'Basic', desc: 'Phone number match + name confirmation', icon: '🟢' },
@@ -165,7 +179,7 @@ export function Settings() {
                     className={`flex cursor-pointer items-start gap-4 rounded-lg border p-4 transition-all ${
                       form.verificationLevel === level.level
                         ? 'border-brand-500 bg-brand-500/5'
-                        : 'border-surface-border hover:border-zinc-600'
+                        : 'border-border-default hover:border-strong'
                     }`}
                   >
                     <input
@@ -178,7 +192,7 @@ export function Settings() {
                     />
                     <div>
                       <p className="font-medium text-text-primary">{level.icon} {level.label}</p>
-                      <p className="text-sm text-text-muted">{level.desc}</p>
+                      <p className="text-sm text-text-tertiary">{level.desc}</p>
                     </div>
                   </label>
                 ))}
@@ -189,7 +203,9 @@ export function Settings() {
 
         {activeTab === 'voice' && (
           <Card className="p-6">
-            <h3 className="mb-4 text-lg font-semibold text-text-primary">Voice & AI Settings</h3>
+            <CardHeader>
+              <CardTitle>Voice & AI Settings</CardTitle>
+            </CardHeader>
             <div className="space-y-4">
               <Select
                 label="Language Preference"
@@ -200,12 +216,12 @@ export function Settings() {
                   { value: 'auto', label: 'Auto-detect all' },
                 ]}
                 value={form.languagePreference}
-                onChange={(v) => setForm((p) => ({ ...p, languagePreference: v }))}
+                onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setForm((p) => ({ ...p, languagePreference: e.target.value }))}
               />
               <Input
                 label="Escalation Phone Number"
                 value={form.escalationPhone}
-                onChange={(e) => setForm((p) => ({ ...p, escalationPhone: e.target.value }))}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setForm((p) => ({ ...p, escalationPhone: e.target.value }))}
                 placeholder="+91 9876543210"
               />
             </div>
@@ -214,26 +230,28 @@ export function Settings() {
 
         {activeTab === 'integrations' && (
           <Card className="p-6">
-            <h3 className="mb-4 text-lg font-semibold text-text-primary">Integrations</h3>
+            <CardHeader>
+              <CardTitle>Integrations</CardTitle>
+            </CardHeader>
             <div className="space-y-4">
-              <div className="flex items-center justify-between rounded-lg bg-surface-secondary p-4">
+              <div className="flex items-center justify-between rounded-lg bg-bg-elevated p-4">
                 <div>
                   <p className="font-medium text-text-primary">Twilio</p>
-                  <p className="text-sm text-text-muted">Voice calls and SMS</p>
+                  <p className="text-sm text-text-tertiary">Voice calls and SMS</p>
                 </div>
                 <Badge variant="success">Connected</Badge>
               </div>
-              <div className="flex items-center justify-between rounded-lg bg-surface-secondary p-4">
+              <div className="flex items-center justify-between rounded-lg bg-bg-elevated p-4">
                 <div>
                   <p className="font-medium text-text-primary">WhatsApp Business</p>
-                  <p className="text-sm text-text-muted">WhatsApp messaging</p>
+                  <p className="text-sm text-text-tertiary">WhatsApp messaging</p>
                 </div>
                 <Badge variant="warning">Coming Soon</Badge>
               </div>
-              <div className="flex items-center justify-between rounded-lg bg-surface-secondary p-4">
+              <div className="flex items-center justify-between rounded-lg bg-bg-elevated p-4">
                 <div>
                   <p className="font-medium text-text-primary">Google Gemini</p>
-                  <p className="text-sm text-text-muted">AI conversation engine</p>
+                  <p className="text-sm text-text-tertiary">AI conversation engine</p>
                 </div>
                 <Badge variant="success">Connected</Badge>
               </div>
@@ -243,11 +261,13 @@ export function Settings() {
 
         {activeTab === 'billing' && (
           <Card className="p-6">
-            <h3 className="mb-4 text-lg font-semibold text-text-primary">Billing & Usage</h3>
-            <div className="mb-6 rounded-lg bg-surface-secondary p-4">
-              <p className="text-sm text-text-muted">Current Plan</p>
+            <CardHeader>
+              <CardTitle>Billing & Usage</CardTitle>
+            </CardHeader>
+            <div className="mb-6 rounded-lg bg-bg-elevated p-4">
+              <p className="text-sm text-text-tertiary">Current Plan</p>
               <p className="text-2xl font-bold text-text-primary">Growth</p>
-              <p className="text-sm text-text-muted">₹9,999/month</p>
+              <p className="text-sm text-text-tertiary">₹9,999/month</p>
             </div>
             <div className="space-y-3">
               <div className="flex items-center justify-between">
@@ -278,7 +298,7 @@ export function Settings() {
             <motion.span
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="text-sm text-emerald-400"
+              className="text-sm text-success"
             >
               Changes saved successfully
             </motion.span>
@@ -288,3 +308,5 @@ export function Settings() {
     </PageWrapper>
   )
 }
+
+export default Settings

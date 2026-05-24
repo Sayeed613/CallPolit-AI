@@ -1,19 +1,20 @@
-import React, { useRef, useMemo, useEffect } from 'react'
+import { useEffect, useRef } from 'react'
+
+interface Particle {
+  x: number
+  y: number
+  vx: number
+  vy: number
+  size: number
+  opacity: number
+}
 
 export function ParticleBackground() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-
-  const particles = useMemo(() => {
-    const count = 80
-    return Array.from({ length: count }, () => ({
-      x: Math.random() * 2 - 1,
-      y: Math.random() * 2 - 1,
-      z: Math.random() * 2 - 1,
-      size: Math.random() * 0.003 + 0.001,
-      speed: Math.random() * 0.2 + 0.05,
-      opacity: Math.random() * 0.5 + 0.1,
-    }))
-  }, [])
+  const particlesRef = useRef<Particle[]>([])
+  const mouseRef = useRef({ x: 0, y: 0 })
+  const animationFrameRef = useRef<number>(0)
+  const visibilityRef = useRef(true)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -22,83 +23,112 @@ export function ParticleBackground() {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    let animationFrameId: number
-    let mouseX = 0
-    let mouseY = 0
-    let time = 0
-
-    const handleResize = () => {
+    const resize = () => {
       canvas.width = window.innerWidth
       canvas.height = window.innerHeight
     }
 
-    const handleMouseMove = (e: MouseEvent) => {
-      mouseX = (e.clientX / window.innerWidth) * 2 - 1
-      mouseY = (e.clientY / window.innerHeight) * 2 - 1
+    const init = () => {
+      const count = 60
+      particlesRef.current = Array.from({ length: count }, () => ({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        vx: (Math.random() - 0.5) * 0.3,
+        vy: (Math.random() - 0.5) * 0.3,
+        size: Math.random() * 2 + 0.5,
+        opacity: Math.random() * 0.4 + 0.1,
+      }))
     }
 
-    handleResize()
-    window.addEventListener('resize', handleResize)
-    window.addEventListener('mousemove', handleMouseMove)
+    const animate = () => {
+      if (!ctx || !canvas) return
 
-    const render = () => {
-      time += 0.005
       ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-      const projected = particles.map((p) => {
-        const x = p.x + mouseX * 0.1 + Math.sin(time * p.speed + p.z) * 0.05
-        const y = p.y + mouseY * 0.1 + Math.cos(time * p.speed + p.z) * 0.05
-        const sx = (x / 2 + 0.5) * canvas.width
-        const sy = (y / 2 + 0.5) * canvas.height
-        const sz = p.size * canvas.width
-        return { x: sx, y: sy, size: sz, opacity: p.opacity }
-      })
+      const particles = particlesRef.current
+      const mouse = mouseRef.current
 
-      // Draw connections
-      ctx.strokeStyle = 'rgba(99, 102, 241, 0.06)'
-      ctx.lineWidth = 0.5
-      for (let i = 0; i < projected.length; i++) {
-        for (let j = i + 1; j < projected.length; j++) {
-          const dx = projected[i].x - projected[j].x
-          const dy = projected[i].y - projected[j].y
-          const dist = Math.sqrt(dx * dx + dy * dy)
-          if (dist < 200) {
-            ctx.globalAlpha = (1 - dist / 200) * 0.3
+      // Update and draw particles
+      for (let i = 0; i < particles.length; i++) {
+        const p = particles[i]
+
+        // Apply mouse parallax
+        const dx = mouse.x - canvas.width / 2
+        const dy = mouse.y - canvas.height / 2
+        const targetX = p.x + dx * 0.02
+        const targetY = p.y + dy * 0.02
+
+        p.x += (targetX - p.x) * 0.02 + p.vx
+        p.y += (targetY - p.y) * 0.02 + p.vy
+
+        // Wrap around
+        if (p.x < -10) p.x = canvas.width + 10
+        if (p.x > canvas.width + 10) p.x = -10
+        if (p.y < -10) p.y = canvas.height + 10
+        if (p.y > canvas.height + 10) p.y = -10
+
+        // Draw particle
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2)
+        ctx.fillStyle = `rgba(99, 102, 241, ${p.opacity})`
+        ctx.fill()
+
+        // Draw connections
+        for (let j = i + 1; j < particles.length; j++) {
+          const p2 = particles[j]
+          const dist = Math.sqrt((p.x - p2.x) ** 2 + (p.y - p2.y) ** 2)
+
+          if (dist < 150) {
+            const opacity = (1 - dist / 150) * 0.12
             ctx.beginPath()
-            ctx.moveTo(projected[i].x, projected[i].y)
-            ctx.lineTo(projected[j].x, projected[j].y)
+            ctx.moveTo(p.x, p.y)
+            ctx.lineTo(p2.x, p2.y)
+            ctx.strokeStyle = `rgba(99, 102, 241, ${opacity})`
+            ctx.lineWidth = 0.5
             ctx.stroke()
           }
         }
       }
 
-      // Draw particles
-      projected.forEach((p) => {
-        ctx.globalAlpha = p.opacity
-        ctx.fillStyle = '#818cf8'
-        ctx.beginPath()
-        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2)
-        ctx.fill()
-      })
-
-      ctx.globalAlpha = 1
-      animationFrameId = requestAnimationFrame(render)
+      animationFrameRef.current = requestAnimationFrame(animate)
     }
 
-    render()
+    const handleMouseMove = (e: MouseEvent) => {
+      mouseRef.current = { x: e.clientX, y: e.clientY }
+    }
+
+    const handleVisibilityChange = () => {
+      visibilityRef.current = !document.hidden
+      if (document.hidden) {
+        cancelAnimationFrame(animationFrameRef.current)
+      } else {
+        animationFrameRef.current = requestAnimationFrame(animate)
+      }
+    }
+
+    resize()
+    init()
+    animate()
+
+    window.addEventListener('resize', resize)
+    window.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
 
     return () => {
-      cancelAnimationFrame(animationFrameId)
-      window.removeEventListener('resize', handleResize)
+      cancelAnimationFrame(animationFrameRef.current)
+      window.removeEventListener('resize', resize)
       window.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [particles])
+  }, [])
 
   return (
     <canvas
       ref={canvasRef}
-      className="fixed inset-0 pointer-events-none"
-      style={{ zIndex: 0 }}
+      className="fixed inset-0 pointer-events-none z-0"
+      style={{ opacity: 0.6 }}
     />
   )
 }
+
+export default ParticleBackground

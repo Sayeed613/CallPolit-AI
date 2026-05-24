@@ -3,10 +3,12 @@ from datetime import datetime
 
 router = APIRouter()
 
+
 @router.get("/health")
 async def health_check():
     return {
         "status": "ok",
         "service": "CallPilot AI",
-        "timestamp": datetime.utcnow().isoformat()
+        "version": "2.0.0",
+        "timestamp": datetime.utcnow().isoformat(),
     }

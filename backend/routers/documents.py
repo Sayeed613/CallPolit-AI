@@ -1,162 +1,170 @@
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
+import os
+import uuid
+import logging
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
+from typing import Optional
 
-from services.supabase_client import (
-    supabase,
-    create_document,
-    update_document_status,
-    insert_chunk,
-    match_chunks,
-)
-from services.gemini_service import get_embedding
-from services.rag_service import chunk_text
+from services.supabase_client import supabase, verify_company_ownership
 from services.auth_middleware import get_current_user
+from services.gemini_service import generate_embedding
 
-router = APIRouter(prefix="/api/documents", tags=["documents"])
+logger = logging.getLogger(__name__)
 
-
-class QueryRequest(BaseModel):
-    company_id: str
-    question: str
+router = APIRouter()
 
 
-@router.post("/upload")
-async def upload_document(
-    file: UploadFile = File(...),
-    company_id: str = Form(...),
+@router.get("/list/{company_id}")
+async def list_documents(
+    company_id: str,
     user_id: str = Depends(get_current_user),
 ):
-    """Upload a PDF, extract text, chunk it, embed it, and store vectors.
+    verify_company_ownership(company_id, user_id)
+    result = (
+        supabase.table("documents")
+        .select("*")
+        .eq("company_id", company_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return {"documents": result.data}
 
-    Steps:
-    1. Save PDF to Supabase Storage bucket "documents" at {company_id}/{filename}
-    2. Extract full text using pypdf
-    3. Create document record (status="processing")
-    4. Split text into chunks (500 tokens, 50 overlap)
-    5. Embed and insert each chunk into document_chunks
-    6. Update document status to "ready"
-    """
-    # Ownership check — user must own this company
-    from services.supabase_client import verify_company_ownership
+
+@router.post("/upload/{company_id}")
+async def upload_document(
+    company_id: str,
+    file: UploadFile = File(...),
+    user_id: str = Depends(get_current_user),
+):
     verify_company_ownership(company_id, user_id)
 
-    # Validate file type
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    # Read file content
+    content = await file.read()
+    file_size = len(content)
+    file_ext = os.path.splitext(file.filename or "document.pdf")[1].lower()
 
-    # Read file bytes
-    file_bytes = await file.read()
+    # Save to local storage (for now)
+    upload_dir = f"uploads/{company_id}"
+    os.makedirs(upload_dir, exist_ok=True)
+    file_id = str(uuid.uuid4())
+    storage_path = f"{upload_dir}/{file_id}{file_ext}"
 
-    # 1. Upload to Supabase Storage
-    storage_path = f"{company_id}/{file.filename}"
+    with open(storage_path, "wb") as f:
+        f.write(content)
+
+    # Insert document record
+    doc_result = supabase.table("documents").insert({
+        "company_id": company_id,
+        "filename": f"{file_id}{file_ext}",
+        "original_filename": file.filename or "document.pdf",
+        "file_size": file_size,
+        "mime_type": file.content_type or "application/pdf",
+        "status": "processing",
+        "storage_path": storage_path,
+    }).execute()
+
+    if not doc_result.data:
+        raise HTTPException(status_code=500, detail="Failed to create document record")
+
+    document_id = doc_result.data[0]["id"]
+
+    # Process document - extract text chunks
     try:
-        supabase.storage.from_("documents").upload(
-            storage_path,
-            file_bytes,
-            {"content-type": "application/pdf"},
-        )
-    except Exception as e:
-        # If file already exists, overwrite it
-        if "Duplicate" in str(e):
-            supabase.storage.from_("documents").update(
-                storage_path,
-                file_bytes,
-                {"content-type": "application/pdf"},
-            )
+        if file_ext == ".pdf":
+            from PyPDF2 import PdfReader
+            import io
+
+            pdf_reader = PdfReader(io.BytesIO(content))
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+        elif file_ext == ".txt":
+            text = content.decode("utf-8", errors="replace")
         else:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to upload file to storage: {str(e)}",
-            )
+            text = content.decode("utf-8", errors="replace")
 
-    # Get public URL
-    file_url = supabase.storage.from_("documents").get_public_url(storage_path)
+        # Split into chunks
+        chunks = []
+        words = text.split()
+        chunk_size = 200
+        for i in range(0, len(words), chunk_size):
+            chunk_text = " ".join(words[i : i + chunk_size])
+            if chunk_text.strip():
+                chunks.append(chunk_text)
 
-    # 2. Extract text from PDF using pypdf
-    try:
-        from pypdf import PdfReader
-        import io
+        # Insert chunks
+        chunk_records = []
+        for idx, chunk_text in enumerate(chunks):
+            chunk_records.append({
+                "document_id": document_id,
+                "company_id": company_id,
+                "chunk_index": idx,
+                "content": chunk_text,
+            })
 
-        pdf_reader = PdfReader(io.BytesIO(file_bytes))
-        extracted_text = ""
-        for page in pdf_reader.pages:
-            extracted_text += page.extract_text() + "\n"
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to extract text from PDF: {str(e)}",
-        )
+        # Insert chunks and generate embeddings
+        if chunk_records:
+            supabase.table("document_chunks").insert(chunk_records).execute()
 
-    if not extracted_text.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="No text could be extracted from the PDF",
-        )
+            # Generate embeddings (do in background for now)
+            for idx, chunk_text in enumerate(chunks[:50]):  # Limit to 50 chunks for speed
+                try:
+                    embedding = generate_embedding(chunk_text)
+                    if embedding:
+                        supabase.table("document_chunks").update({
+                            "embedding": embedding
+                        }).eq("document_id", document_id).eq("chunk_index", idx).execute()
+                except Exception as e:
+                    logger.error(f"Embedding error for chunk {idx}: {e}")
 
-    # 3. Create document record
-    document = create_document(company_id, file.filename, file_url)
-    document_id = document["id"]
-
-    try:
-        # 4. Chunk the text
-        chunks = chunk_text(extracted_text, chunk_size=500, overlap=50)
-
-        # 5. Embed and insert each chunk
-        for i, chunk in enumerate(chunks):
-            embedding = get_embedding(chunk, prefix="search_document")
-            insert_chunk(document_id, company_id, i, chunk, embedding)
-
-        # 6. Update document status to ready
-        update_document_status(document_id, "ready", extracted_text)
-
-        return {
-            "success": True,
-            "document_id": document_id,
-            "chunks_created": len(chunks),
+        # Mark document as ready
+        supabase.table("documents").update({
             "status": "ready",
-        }
+            "chunk_count": len(chunks),
+        }).eq("id", document_id).execute()
 
+        return {"document_id": document_id, "chunks": len(chunks)}
     except Exception as e:
-        update_document_status(document_id, "failed")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed during chunking/embedding: {str(e)}",
-        )
+        supabase.table("documents").update({
+            "status": "failed",
+            "error_message": str(e),
+        }).eq("id", document_id).execute()
+        raise HTTPException(status_code=500, detail=f"Document processing failed: {str(e)}")
 
 
-@router.post("/query")
-async def query_documents(
-    req: QueryRequest,
+@router.delete("/delete/{document_id}")
+async def delete_document(
+    document_id: str,
     user_id: str = Depends(get_current_user),
 ):
-    """Given a question, embed it and return top 5 matching chunks."""
-    # Ownership check — user must own this company
-    from services.supabase_client import verify_company_ownership
-    verify_company_ownership(req.company_id, user_id)
+    existing = supabase.table("documents").select("*").eq("id", document_id).single().execute()
+    if not existing.data:
+        raise HTTPException(status_code=404, detail="Document not found")
+    verify_company_ownership(existing.data["company_id"], user_id)
 
-    if not req.question.strip():
-        raise HTTPException(status_code=400, detail="Question cannot be empty")
+    # Delete storage file
+    storage_path = existing.data.get("storage_path")
+    if storage_path and os.path.exists(storage_path):
+        os.remove(storage_path)
 
-    try:
-        # 1. Embed the question
-        query_embedding = get_embedding(req.question)
+    # Delete chunks and document
+    supabase.table("document_chunks").delete().eq("document_id", document_id).execute()
+    supabase.table("documents").delete().eq("id", document_id).execute()
 
-        # 2. Search for matching chunks
-        chunks = match_chunks(query_embedding, req.company_id, match_count=5)
+    return {"success": True}
 
-        return {
-            "question": req.question,
-            "chunks": [
-                {
-                    "chunk_text": c["chunk_text"],
-                    "similarity": float(c["similarity"]),
-                }
-                for c in chunks
-            ],
-        }
 
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Query failed: {str(e)}",
-        )
+@router.post("/query/{company_id}")
+async def query_documents(
+    company_id: str,
+    query: str = Form(...),
+    user_id: str = Depends(get_current_user),
+):
+    verify_company_ownership(company_id, user_id)
+
+    from services.rag_service import retrieve_relevant_chunks, build_context
+
+    chunks = retrieve_relevant_chunks(company_id, query)
+    context = build_context(chunks)
+
+    return {"context": context, "chunks": chunks}

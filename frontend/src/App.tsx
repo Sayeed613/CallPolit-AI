@@ -1,302 +1,111 @@
-import React, { useEffect, useState } from 'react'
-import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
-import { Toaster, toast } from 'react-hot-toast'
-import { useAuthStore } from './stores/authStore'
-import { useCompanyStore } from './stores/companyStore'
-import { Sidebar } from './components/layout/Sidebar'
-import { TopBar } from './components/layout/TopBar'
-import { MobileNav } from './components/layout/MobileNav'
-import { LandingPage } from './components/LandingPage'
-import { Login } from './pages/Login'
-import { Register } from './pages/Signup'
-import { ForgotPassword } from './pages/auth/ForgotPassword'
-import { TOS } from './pages/TOS'
-import { Dashboard } from './pages/Dashboard'
-import { LiveDashboard } from './pages/live/LiveDashboard'
-import { CampaignsTab } from './pages/CampaignsTab'
-import { CampaignDetail } from './pages/campaigns/CampaignDetail'
-import { NewCampaign } from './pages/NewCampaign'
-import { ContactsTab } from './pages/ContactsTab'
-import { ImportContacts } from './pages/ImportContacts'
-import { AnalyticsTab } from './pages/AnalyticsTab'
-import { DocumentsTab } from './pages/DocumentsTab'
-import { Settings } from './pages/settings/Settings'
-import { AppointmentsTab } from './pages/AppointmentsTab'
-import { CompanyPage } from './pages/CompanyPage'
-import { ContactDetail } from './pages/ContactDetail'
+import { useEffect, lazy, Suspense } from 'react'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { AnimatePresence } from 'framer-motion'
+import useAuthStore from './stores/authStore'
+import PageWrapper from './components/layout/PageWrapper'
+import LandingPage from './components/LandingPage'
 
-// Error Boundary Component
-class ErrorBoundary extends React.Component<
-  { children: React.ReactNode },
-  { hasError: boolean; error?: Error }
-> {
-  constructor(props: { children: React.ReactNode }) {
-    super(props)
-    this.state = { hasError: false }
-  }
+// Lazy load pages
+const Login = lazy(() => import('./pages/Login'))
+const Signup = lazy(() => import('./pages/Signup'))
+const ForgotPassword = lazy(() => import('./pages/auth/ForgotPassword'))
+const TOS = lazy(() => import('./pages/TOS'))
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const LiveDashboard = lazy(() => import('./pages/live/LiveDashboard'))
+const CampaignsTab = lazy(() => import('./pages/CampaignsTab'))
+const CampaignDetail = lazy(() => import('./pages/campaigns/CampaignDetail'))
+const NewCampaign = lazy(() => import('./pages/NewCampaign'))
+const ContactsTab = lazy(() => import('./pages/ContactsTab'))
+const ContactDetail = lazy(() => import('./pages/ContactDetail'))
+const ImportContacts = lazy(() => import('./pages/ImportContacts'))
+const AnalyticsTab = lazy(() => import('./pages/AnalyticsTab'))
+const DocumentsTab = lazy(() => import('./pages/DocumentsTab'))
+const AppointmentsTab = lazy(() => import('./pages/AppointmentsTab'))
+const CompanyPage = lazy(() => import('./pages/CompanyPage'))
+const Settings = lazy(() => import('./pages/settings/Settings'))
 
-  static getDerivedStateFromError(error: Error) {
-    return { hasError: true, error }
-  }
-
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error('App error:', error, errorInfo)
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="flex min-h-screen items-center justify-center bg-surface">
-          <div className="text-center">
-            <span className="mb-4 block text-6xl">⚠️</span>
-            <h1 className="mb-2 text-2xl font-bold text-text-primary">Something went wrong</h1>
-            <p className="mb-6 text-text-muted">{this.state.error?.message || 'An unexpected error occurred'}</p>
-            <button
-              onClick={() => {
-                this.setState({ hasError: false })
-                window.location.reload()
-              }}
-              className="rounded-lg bg-brand-500 px-6 py-2.5 font-medium text-white transition-colors hover:bg-brand-600"
-            >
-              Refresh Page
-            </button>
-          </div>
-        </div>
-      )
-    }
-    return this.props.children
-  }
-}
-
-function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { user, session, loading, initialize } = useAuthStore()
-  const navigate = useNavigate()
-  const location = useLocation()
-
-  useEffect(() => {
-    initialize()
-  }, [initialize])
-
-  useEffect(() => {
-    if (!loading && !session) {
-      navigate('/login', { replace: true })
-    }
-  }, [loading, session, navigate])
-
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-surface">
-        <div className="text-center">
-          <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-2 border-brand-500 border-t-transparent" />
-          <p className="text-text-muted">Loading...</p>
-        </div>
-      </div>
-    )
-  }
-
-  if (!session) return null
-
-  return <>{children}</>
-}
-
-function AppLayout({ children }: { children: React.ReactNode }) {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-
+function LoadingFallback() {
   return (
-    <div className="flex min-h-screen bg-surface">
-      <Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)} />
-      <div className={`flex flex-1 flex-col transition-all ${sidebarCollapsed ? 'ml-16' : 'ml-72'}`}>
-        <TopBar />
-        <main className="flex-1 pb-20 md:pb-0">
-          {children}
-        </main>
-        <MobileNav />
+    <div className="flex items-center justify-center min-h-screen bg-bg-base">
+      <div className="flex flex-col items-center gap-4">
+        <div className="w-8 h-8 border-2 border-brand-500/30 border-t-brand-500 rounded-full animate-spin" />
+        <p className="text-sm text-text-tertiary">Loading...</p>
       </div>
     </div>
   )
 }
 
-export default function App() {
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { user, loading, initialized } = useAuthStore()
+
+  if (!initialized || loading) {
+    return <LoadingFallback />
+  }
+
+  if (!user) {
+    return <Navigate to="/login" replace />
+  }
+
+  return <>{children}</>
+}
+
+function PublicRoute({ children }: { children: React.ReactNode }) {
+  const { user } = useAuthStore()
+  if (user) {
+    return <Navigate to="/dashboard" replace />
+  }
+  return <>{children}</>
+}
+
+function AppContent() {
+  const location = useLocation()
+  const { initialize, initialized, loading } = useAuthStore()
+
+  useEffect(() => {
+    if (!initialized) {
+      initialize()
+    }
+  }, [initialize, initialized])
+
+  if (!initialized || loading) {
+    return <LoadingFallback />
+  }
+
   return (
-    <ErrorBoundary>
-      <Router>
-        <Toaster
-          position="top-right"
-          toastOptions={{
-            style: {
-              background: '#1a1a1a',
-              color: '#ffffff',
-              border: '1px solid #2a2a2a',
-              borderRadius: '12px',
-            },
-            success: { duration: 3000, iconTheme: { primary: '#10b981', secondary: '#1a1a1a' } },
-            error: { duration: 5000, iconTheme: { primary: '#ef4444', secondary: '#1a1a1a' } },
-          }}
-        />
-        <Routes>
-          {/* Public Routes */}
-          <Route path="/" element={<LandingPage />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
+    <AnimatePresence mode="wait">
+      <Suspense fallback={<LoadingFallback />}>
+        <Routes location={location} key={location.pathname}>
+          {/* Public routes */}
+          <Route path="/" element={<PublicRoute><LandingPage /></PublicRoute>} />
+          <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
+          <Route path="/signup" element={<PublicRoute><Signup /></PublicRoute>} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/tos" element={<TOS />} />
 
-          {/* Protected Routes */}
-          <Route
-            path="/dashboard"
-            element={
-              <AuthGuard>
-                <AppLayout>
-                  <Dashboard />
-                </AppLayout>
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/live"
-            element={
-              <AuthGuard>
-                <AppLayout>
-                  <LiveDashboard />
-                </AppLayout>
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/campaigns"
-            element={
-              <AuthGuard>
-                <AppLayout>
-                  <CampaignsTab />
-                </AppLayout>
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/campaigns/new"
-            element={
-              <AuthGuard>
-                <AppLayout>
-                  <NewCampaign />
-                </AppLayout>
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/campaigns/:id"
-            element={
-              <AuthGuard>
-                <AppLayout>
-                  <CampaignDetail />
-                </AppLayout>
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/contacts"
-            element={
-              <AuthGuard>
-                <AppLayout>
-                  <ContactsTab />
-                </AppLayout>
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/contacts/import"
-            element={
-              <AuthGuard>
-                <AppLayout>
-                  <ImportContacts />
-                </AppLayout>
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/contacts/:id"
-            element={
-              <AuthGuard>
-                <AppLayout>
-                  <ContactDetail />
-                </AppLayout>
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/analytics"
-            element={
-              <AuthGuard>
-                <AppLayout>
-                  <AnalyticsTab />
-                </AppLayout>
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/documents"
-            element={
-              <AuthGuard>
-                <AppLayout>
-                  <DocumentsTab />
-                </AppLayout>
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/appointments"
-            element={
-              <AuthGuard>
-                <AppLayout>
-                  <AppointmentsTab />
-                </AppLayout>
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/settings"
-            element={
-              <AuthGuard>
-                <AppLayout>
-                  <Settings />
-                </AppLayout>
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/settings/:tab"
-            element={
-              <AuthGuard>
-                <AppLayout>
-                  <Settings />
-                </AppLayout>
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/company"
-            element={
-              <AuthGuard>
-                <AppLayout>
-                  <CompanyPage />
-                </AppLayout>
-              </AuthGuard>
-            }
-          />
-          <Route
-            path="/company/:id"
-            element={
-              <AuthGuard>
-                <AppLayout>
-                  <CompanyPage />
-                </AppLayout>
-              </AuthGuard>
-            }
-          />
+          {/* Protected routes */}
+          <Route path="/dashboard" element={<ProtectedRoute><PageWrapper><Dashboard /></PageWrapper></ProtectedRoute>} />
+          <Route path="/live" element={<ProtectedRoute><PageWrapper><LiveDashboard /></PageWrapper></ProtectedRoute>} />
+          <Route path="/campaigns" element={<ProtectedRoute><PageWrapper><CampaignsTab /></PageWrapper></ProtectedRoute>} />
+          <Route path="/campaigns/new" element={<ProtectedRoute><PageWrapper><NewCampaign /></PageWrapper></ProtectedRoute>} />
+          <Route path="/campaigns/:id" element={<ProtectedRoute><PageWrapper><CampaignDetail /></PageWrapper></ProtectedRoute>} />
+          <Route path="/contacts" element={<ProtectedRoute><PageWrapper><ContactsTab /></PageWrapper></ProtectedRoute>} />
+          <Route path="/contacts/import" element={<ProtectedRoute><PageWrapper><ImportContacts /></PageWrapper></ProtectedRoute>} />
+          <Route path="/contacts/:id" element={<ProtectedRoute><PageWrapper><ContactDetail /></PageWrapper></ProtectedRoute>} />
+          <Route path="/analytics" element={<ProtectedRoute><PageWrapper><AnalyticsTab /></PageWrapper></ProtectedRoute>} />
+          <Route path="/documents" element={<ProtectedRoute><PageWrapper><DocumentsTab /></PageWrapper></ProtectedRoute>} />
+          <Route path="/appointments" element={<ProtectedRoute><PageWrapper><AppointmentsTab /></PageWrapper></ProtectedRoute>} />
+          <Route path="/company" element={<ProtectedRoute><PageWrapper><CompanyPage /></PageWrapper></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><PageWrapper><Settings /></PageWrapper></ProtectedRoute>} />
+          <Route path="/settings/:tab" element={<ProtectedRoute><PageWrapper><Settings /></PageWrapper></ProtectedRoute>} />
 
-          {/* Catch all */}
-          <Route path="*" element={<Navigate to="/" replace />} />
+          {/* Fallback */}
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
-      </Router>
-    </ErrorBoundary>
+      </Suspense>
+    </AnimatePresence>
   )
+}
+
+export default function App() {
+  return <AppContent />
 }

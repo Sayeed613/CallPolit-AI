@@ -1,231 +1,113 @@
-"""Live call monitoring router for CallPilot AI.
-Provides real-time call monitoring via REST and WebSocket.
-"""
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException, Query
-from typing import Optional, List
-from datetime import datetime, timezone, timedelta
-from pydantic import BaseModel
-from services.supabase_client import supabase, get_company
-from services.auth_middleware import get_current_user
+import json
+import asyncio
+import logging
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from typing import Optional
 
-router = APIRouter(prefix="/api/live", tags=["live"])
+from services.supabase_client import supabase
+from services.auth_middleware import get_current_user, get_optional_user
+from services.scheduler import get_active_campaigns
 
-# ─── WebSocket Connection Manager ──────────────────────────────────────────────
+logger = logging.getLogger(__name__)
 
-class ConnectionManager:
-    """Manages WebSocket connections for live call updates."""
-    
-    def __init__(self):
-        self.active_connections: dict[str, list[WebSocket]] = {}
-    
-    async def connect(self, websocket: WebSocket, company_id: str):
-        await websocket.accept()
-        if company_id not in self.active_connections:
-            self.active_connections[company_id] = []
-        self.active_connections[company_id].append(websocket)
-    
-    def disconnect(self, websocket: WebSocket, company_id: str):
-        if company_id in self.active_connections:
-            self.active_connections[company_id] = [
-                ws for ws in self.active_connections[company_id]
-                if ws != websocket
-            ]
-            if not self.active_connections[company_id]:
-                del self.active_connections[company_id]
-    
-    async def broadcast(self, company_id: str, message: dict):
-        """Broadcast a message to all connections for a company."""
-        if company_id not in self.active_connections:
-            return
-        disconnected = []
-        for connection in self.active_connections[company_id]:
-            try:
-                await connection.send_json(message)
-            except Exception:
-                disconnected.append(connection)
-        for conn in disconnected:
-            self.disconnect(conn, company_id)
+router = APIRouter()
+
+# WebSocket connections
+_active_connections: set[WebSocket] = set()
 
 
-manager = ConnectionManager()
+@router.get("/calls")
+async def get_live_calls(user_id: str = Depends(get_current_user)):
+    """Get current active/live calls."""
+    # Get active in-progress calls
+    result = (
+        supabase.table("call_logs")
+        .select("*, campaigns!inner(company_id)")
+        .eq("status", "in-progress")
+        .order("created_at", desc=True)
+        .limit(50)
+        .execute()
+    )
+
+    return {"calls": result.data, "active_count": len(result.data)}
 
 
-# ─── Models ────────────────────────────────────────────────────────────────────
+@router.get("/stats")
+async def get_live_stats(user_id: str = Depends(get_current_user)):
+    """Get live dashboard statistics."""
+    # Total today
+    today = supabase.table("call_logs").select("id", count="exact")\
+        .gte("created_at", "today")\
+        .execute()
 
-class CallStatusUpdate(BaseModel):
-    call_sid: str
-    status: str
-    duration_seconds: Optional[int] = None
-    language: Optional[str] = None
-    verification_status: Optional[str] = None
-    sentiment: Optional[str] = None
-    transcript: Optional[list] = None
-    ai_confidence: Optional[float] = None
+    connected_today = supabase.table("call_logs").select("id", count="exact")\
+        .gte("created_at", "today")\
+        .eq("status", "completed")\
+        .execute()
 
+    active_calls = supabase.table("call_logs").select("id", count="exact")\
+        .eq("status", "in-progress")\
+        .execute()
 
-# ─── REST Endpoints ────────────────────────────────────────────────────────────
+    active_campaigns = get_active_campaigns()
 
-@router.get("/calls/{company_id}")
-async def get_active_calls(
-    company_id: str,
-    user: dict = Depends(get_current_user),
-):
-    """Get all currently active calls for a company."""
-    try:
-        result = supabase.table("call_logs") \
-            .select("*") \
-            .eq("company_id", company_id) \
-            .eq("status", "in_progress") \
-            .execute()
-        
-        active_calls = []
-        for call in result.data or []:
-            collected = call.get("collected_data", {}) or {}
-            active_calls.append({
-                "call_sid": call.get("twilio_call_sid", ""),
-                "contact_id": call.get("contact_id"),
-                "campaign_id": call.get("campaign_id"),
-                "phone": _mask_phone(collected.get("customer_phone", "") or call.get("from_number", "")),
-                "duration_seconds": call.get("duration_seconds", 0),
-                "status": "in_progress",
-                "verification_status": collected.get("verification_status", "none"),
-                "language": collected.get("language", "hi-IN"),
-                "sentiment": collected.get("sentiment", "neutral"),
-                "started_at": call.get("created_at", ""),
-            })
-        
-        return {"calls": active_calls, "count": len(active_calls)}
-    except Exception as e:
-        return {"calls": [], "count": 0, "error": str(e)}
+    return {
+        "total_today": today.count if hasattr(today, "count") else 0,
+        "connected_today": connected_today.count if hasattr(connected_today, "count") else 0,
+        "active_calls": active_calls.count if hasattr(active_calls, "count") else 0,
+        "active_campaigns": len(active_campaigns),
+        "active_campaign_ids": active_campaigns,
+    }
 
 
-@router.get("/call/{call_sid}")
-async def get_call_details(
-    call_sid: str,
-    user: dict = Depends(get_current_user),
-):
-    """Get detailed information about a specific active call."""
-    try:
-        result = supabase.table("call_logs") \
-            .select("*") \
-            .eq("twilio_call_sid", call_sid) \
-            .maybe_single() \
-            .execute()
-        
-        if not result.data:
-            raise HTTPException(status_code=404, detail="Call not found")
-        
-        call = result.data
-        collected = call.get("collected_data", {}) or {}
-        transcript = call.get("transcript", []) or []
-        
-        return {
-            "call_sid": call.get("twilio_call_sid"),
-            "status": call.get("status"),
-            "duration_seconds": call.get("duration_seconds", 0),
-            "phone": _mask_phone(collected.get("customer_phone", "")),
-            "language": collected.get("language", "hi-IN"),
-            "verification_status": collected.get("verification_status", "none"),
-            "verification_level": collected.get("verification_level", 1),
-            "sentiment": collected.get("sentiment", "neutral"),
-            "transcript": transcript[-10:] if transcript else [],  # Last 10 exchanges
-            "follow_up_needed": call.get("needs_callback", False),
-            "created_at": call.get("created_at"),
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@router.websocket("/ws")
+async def live_websocket(websocket: WebSocket):
+    """WebSocket endpoint for real-time live call updates."""
+    await websocket.accept()
+    _active_connections.add(websocket)
 
-
-@router.post("/intervene/{call_sid}")
-async def intervene_call(
-    call_sid: str,
-    user: dict = Depends(get_current_user),
-):
-    """Human takeover of an active call.
-    
-    This marks the call for human intervention. The voice.py handler will
-    detect this flag and transfer the call to the escalation phone number.
-    """
-    try:
-        # Check call exists
-        call = supabase.table("call_logs") \
-            .select("*") \
-            .eq("twilio_call_sid", call_sid) \
-            .maybe_single() \
-            .execute()
-        
-        if not call.data:
-            raise HTTPException(status_code=404, detail="Call not found")
-        
-        collected = call.data.get("collected_data", {}) or {}
-        collected["human_intervention"] = True
-        collected["intervened_at"] = datetime.now(timezone.utc).isoformat()
-        collected["intervened_by"] = user.get("email", "unknown")
-        
-        supabase.table("call_logs") \
-            .update({"collected_data": collected}) \
-            .eq("twilio_call_sid", call_sid) \
-            .execute()
-        
-        # Broadcast intervention event via WebSocket
-        await manager.broadcast(
-            call.data.get("company_id", ""),
-            {
-                "type": "call_intervened",
-                "call_sid": call_sid,
-                "message": "Human agent has taken over the call",
-            }
-        )
-        
-        return {
-            "message": "Intervention requested",
-            "call_sid": call_sid,
-            "status": "intervened",
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ─── WebSocket Endpoint ───────────────────────────────────────────────────────
-
-@router.websocket("/ws/{company_id}")
-async def websocket_endpoint(
-    websocket: WebSocket,
-    company_id: str,
-):
-    """WebSocket for real-time call updates.
-    
-    Sends JSON messages:
-    - call_started: { type, call_sid, phone, timestamp }
-    - call_update: { type, call_sid, status, duration, transcript, verification, sentiment }
-    - call_ended: { type, call_sid, duration, status }
-    - call_intervened: { type, call_sid, message }
-    """
-    await manager.connect(websocket, company_id)
     try:
         while True:
-            # Keep connection alive and listen for client messages
-            data = await websocket.receive_text()
-            # Client can send ping to keep alive
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=10)
+                # Handle ping or other messages
+                if data == "ping":
+                    await websocket.send_json({"type": "pong"})
+            except asyncio.TimeoutError:
+                # Send heartbeat
+                try:
+                    await websocket.send_json({"type": "heartbeat"})
+                except Exception:
+                    break
     except WebSocketDisconnect:
-        manager.disconnect(websocket, company_id)
-    except Exception:
-        manager.disconnect(websocket, company_id)
+        logger.info("WebSocket disconnected")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+    finally:
+        _active_connections.discard(websocket)
 
 
-# ─── Helper Functions ─────────────────────────────────────────────────────────
+async def broadcast_call_update(call_data: dict):
+    """Broadcast a call update to all connected WebSocket clients."""
+    message = json.dumps({"type": "call_update", "data": call_data})
+    dead_connections = set()
+    for ws in _active_connections:
+        try:
+            await ws.send_text(message)
+        except Exception:
+            dead_connections.add(ws)
 
-def _mask_phone(phone: str) -> str:
-    """Mask phone number: +91 98xxx xxx10"""
-    if not phone:
-        return ""
-    cleaned = phone.replace("+", "").replace(" ", "").replace("-", "")
-    if len(cleaned) >= 10:
-        return cleaned[:3] + "xxx" + cleaned[-4:]
-    return phone
+    _active_connections.difference_update(dead_connections)
+
+
+async def broadcast_event(event_type: str, data: dict):
+    """Broadcast a generic event to all connected WebSocket clients."""
+    message = json.dumps({"type": event_type, "data": data})
+    dead_connections = set()
+    for ws in _active_connections:
+        try:
+            await ws.send_text(message)
+        except Exception:
+            dead_connections.add(ws)
+
+    _active_connections.difference_update(dead_connections)

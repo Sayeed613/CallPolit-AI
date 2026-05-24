@@ -1,124 +1,129 @@
-from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+from typing import Optional
+from datetime import date
 
-from services.supabase_client import (
-    create_appointment,
-    get_appointment,
-    get_appointments_for_company,
-    update_appointment_status,
-    get_weekly_analytics,
-    get_weekly_comparison,
-    get_daily_trends,
-    verify_company_ownership,
-)
+from services.supabase_client import supabase, verify_company_ownership
 from services.auth_middleware import get_current_user
 
-router = APIRouter(prefix="/api", tags=["appointments", "analytics"])
+router = APIRouter()
 
 
-# ─── Appointment CRUD ───────────────────────────────────────────────────────────
+class AppointmentCreate(BaseModel):
+    company_id: str
+    contact_id: Optional[str] = None
+    contact_name: str = ""
+    contact_phone: str = ""
+    title: str = "Appointment"
+    description: str = ""
+    appointment_date: str
+    appointment_time: str
+    duration_minutes: int = 15
+    booked_by: str = "ai"
 
 
-@router.get("/appointments/{company_id}")
+class AppointmentUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    appointment_date: Optional[str] = None
+    appointment_time: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@router.get("/list/{company_id}")
 async def list_appointments(
     company_id: str,
-    date_from: str | None = Query(default=None),
-    date_to: str | None = Query(default=None),
-    limit: int = Query(default=50, le=200),
+    status: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
     user_id: str = Depends(get_current_user),
 ):
-    """List appointments for a company with optional date range filters.
-
-    Protected — user must own this company.
-    """
     verify_company_ownership(company_id, user_id)
 
-    appointments = get_appointments_for_company(
-        company_id, date_from=date_from, date_to=date_to, limit=limit
-    )
-    return {"success": True, "appointments": appointments, "count": len(appointments)}
+    query = supabase.table("appointments").select("*").eq("company_id", company_id)
+
+    if status:
+        query = query.eq("status", status)
+    if date_from:
+        query = query.gte("appointment_date", date_from)
+    if date_to:
+        query = query.lte("appointment_date", date_to)
+
+    result = query.order("appointment_date", desc=False).order("appointment_time", desc=False).execute()
+    return {"appointments": result.data}
 
 
-@router.put("/appointments/{appointment_id}/status")
-async def change_appointment_status(
+@router.post("/create")
+async def create_appointment(
+    data: AppointmentCreate,
+    user_id: str = Depends(get_current_user),
+):
+    verify_company_ownership(data.company_id, user_id)
+
+    result = supabase.table("appointments").insert(data.dict()).execute()
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to create appointment")
+
+    return result.data[0]
+
+
+@router.put("/update/{appointment_id}")
+async def update_appointment(
     appointment_id: str,
-    status: str = Query(..., description="New status: confirmed, cancelled, completed, no_show"),
+    data: AppointmentUpdate,
     user_id: str = Depends(get_current_user),
 ):
-    """Update an appointment's status.
-
-    Verifies the user owns the company that owns this appointment.
-    """
-    appt = get_appointment(appointment_id)
-    if not appt:
+    existing = supabase.table("appointments").select("*").eq("id", appointment_id).single().execute()
+    if not existing.data:
         raise HTTPException(status_code=404, detail="Appointment not found")
+    verify_company_ownership(existing.data["company_id"], user_id)
 
-    verify_company_ownership(appt["company_id"], user_id)
-
-    valid_statuses = {"scheduled", "confirmed", "completed", "cancelled", "no_show"}
-    if status not in valid_statuses:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid status. Must be one of: {', '.join(sorted(valid_statuses))}",
-        )
-
-    ok = update_appointment_status(appointment_id, status)
-    if not ok:
-        raise HTTPException(status_code=500, detail="Failed to update appointment status")
-
-    return {"success": True, "appointment_id": appointment_id, "status": status}
+    update_data = {k: v for k, v in data.dict(exclude_none=True).items()}
+    supabase.table("appointments").update(update_data).eq("id", appointment_id).execute()
+    return {"success": True}
 
 
-# ─── Analytics Dashboard ────────────────────────────────────────────────────────
-
-
-@router.get("/analytics/weekly/{company_id}")
-async def weekly_report(
-    company_id: str,
+@router.delete("/delete/{appointment_id}")
+async def delete_appointment(
+    appointment_id: str,
     user_id: str = Depends(get_current_user),
 ):
-    """Get this week's analytics report.
+    existing = supabase.table("appointments").select("*").eq("id", appointment_id).single().execute()
+    if not existing.data:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    verify_company_ownership(existing.data["company_id"], user_id)
 
-    Returns:
-        calls_total, calls_connected, appointments_booked,
-        avg_duration_seconds, connect_rate_pct, hours_saved
-    """
-    verify_company_ownership(company_id, user_id)
-
-    stats = get_weekly_analytics(company_id)
-    return {"success": True, "data": stats}
+    supabase.table("appointments").delete().eq("id", appointment_id).execute()
+    return {"success": True}
 
 
-@router.get("/analytics/weekly/{company_id}/compare")
-async def weekly_comparison(
+@router.get("/calendar/{company_id}/{year}/{month}")
+async def calendar_view(
     company_id: str,
+    year: int,
+    month: int,
     user_id: str = Depends(get_current_user),
 ):
-    """Get this week vs last week comparison.
-
-    Returns:
-        this_week: stats for current week
-        last_week: stats for previous week
-        changes: percentage change for each metric
-    """
     verify_company_ownership(company_id, user_id)
 
-    comparison = get_weekly_comparison(company_id)
-    return {"success": True, "data": comparison}
+    month_str = f"{year:04d}-{month:02d}"
+    result = (
+        supabase.table("appointments")
+        .select("*")
+        .eq("company_id", company_id)
+        .like("appointment_date", f"{month_str}%")
+        .order("appointment_date", desc=False)
+        .execute()
+    )
 
+    # Group by date
+    days: dict = {}
+    for apt in result.data or []:
+        d = apt["appointment_date"]
+        if d not in days:
+            days[d] = []
+        days[d].append(apt)
 
-@router.get("/analytics/trends/{company_id}")
-async def daily_trends(
-    company_id: str,
-    days: int = Query(default=14, le=90, description="Number of days to look back"),
-    user_id: str = Depends(get_current_user),
-):
-    """Get daily call and appointment trends for charts.
-
-    Returns per-day breakdown:
-        date, calls, connected, avg_duration, appointments
-    """
-    verify_company_ownership(company_id, user_id)
-
-    trends = get_daily_trends(company_id, days=days)
-    return {"success": True, "data": trends, "days": days}
+    return {"year": year, "month": month, "days": days}

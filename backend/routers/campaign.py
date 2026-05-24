@@ -1,241 +1,126 @@
-from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
 
-from services.supabase_client import (
-    supabase,
-    get_pending_contacts,
-    create_campaign,
-    update_campaign_status,
-    create_call_log,
-    get_campaign_stats,
-    get_campaign,
-)
-from services.twilio_service import make_call
+from services.supabase_client import supabase, verify_company_ownership
 from services.auth_middleware import get_current_user
+from services.scheduler import start_campaign, pause_campaign, resume_campaign, stop_campaign
 
-router = APIRouter(prefix="/api/campaign", tags=["campaign"])
+router = APIRouter()
 
 
-class LaunchRequest(BaseModel):
+class CampaignCreate(BaseModel):
     company_id: str
-    campaign_name: str
-    calls_per_minute: int = 2
+    name: str
+    calls_per_minute: int = 5
+    language: str = "auto"
+    schedule_type: str = "now"
+    scheduled_at: Optional[str] = None
 
 
-@router.post("/launch")
-async def launch_campaign(
-    req: LaunchRequest,
+@router.get("/list/{company_id}")
+async def list_campaigns(
+    company_id: str,
     user_id: str = Depends(get_current_user),
 ):
-    """Create a campaign and schedule outbound calls via APScheduler.
+    verify_company_ownership(company_id, user_id)
+    result = (
+        supabase.table("campaigns")
+        .select("*")
+        .eq("company_id", company_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return {"campaigns": result.data}
 
-    For each contact, schedules a call with delay:
-        delay_seconds = index * (60 / calls_per_minute)
 
-    Includes retry-eligible contacts (those with retry_count < 3).
-    """
-    from services.supabase_client import verify_company_ownership
-    verify_company_ownership(req.company_id, user_id)
+@router.get("/get/{campaign_id}")
+async def get_campaign_route(
+    campaign_id: str,
+    user_id: str = Depends(get_current_user),
+):
+    result = supabase.table("campaigns").select("*").eq("id", campaign_id).single().execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    verify_company_ownership(result.data["company_id"], user_id)
+    return result.data
 
-    from services.supabase_client import get_company_mode
-    company_mode = get_company_mode(req.company_id)
-    if company_mode == "inbound":
-        raise HTTPException(
-            status_code=403,
-            detail="Campaign launch is not available on the Inbound plan. Upgrade to Outbound or Both."
-        )
 
-    if req.calls_per_minute < 1:
-        raise HTTPException(
-            status_code=400,
-            detail="calls_per_minute must be at least 1",
-        )
+@router.post("/create")
+async def create_campaign(
+    data: CampaignCreate,
+    user_id: str = Depends(get_current_user),
+):
+    verify_company_ownership(data.company_id, user_id)
 
-    # 1. Check no other campaign is already running for this company
-    existing_running = supabase.table("campaigns").select("id, name").eq("company_id", req.company_id).eq("status", "running").execute()
-    if existing_running.data:
-        running_name = existing_running.data[0].get("name", "unnamed")
-        raise HTTPException(
-            status_code=400,
-            detail=f"A campaign is already running for this company: '{running_name}'. Complete or force-complete it first.",
-        )
+    # Count contacts for this company
+    contacts = (
+        supabase.table("contacts")
+        .select("id", count="exact")
+        .eq("company_id", data.company_id)
+        .execute()
+    )
+    total_contacts = contacts.count if hasattr(contacts, "count") else 0
 
-    # 2. Fetch pending contacts (includes retry-eligible contacts)
-    contacts = get_pending_contacts(req.company_id)
-    if not contacts:
-        raise HTTPException(
-            status_code=400,
-            detail="No pending contacts found for this company",
-        )
-
-    total_contacts = len(contacts)
-
-    # 2. Create campaign record
-    try:
-        campaign = create_campaign(req.company_id, req.campaign_name, total_contacts)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create campaign: {str(e)}",
-        )
-
-    campaign_id = campaign["id"]
-
-    # 3. Mark contacts as claimed by this campaign (prevents double-picking)
-    for contact in contacts:
-        supabase.table("contacts").update({
-            "campaign_id": campaign_id,
-        }).eq("id", contact["id"]).execute()
-
-    # 4. Schedule calls using global APScheduler (persists beyond request)
-    try:
-        from apscheduler.triggers.date import DateTrigger
-        from services.scheduler import get_scheduler
-
-        scheduler = get_scheduler()
-
-        delay_between = 60 / req.calls_per_minute  # seconds
-
-        for i, contact in enumerate(contacts):
-            delay_seconds = i * delay_between
-            run_time = datetime.now().timestamp() + delay_seconds
-
-            scheduler.add_job(
-                _place_call,
-                trigger=DateTrigger(
-                    run_date=datetime.fromtimestamp(run_time)
-                ),
-                args=[contact["phone"], campaign_id, contact["id"]],
-                id=f"call_{campaign_id}_{contact['id']}",
-                replace_existing=True,
-            )
-
-    except Exception as e:
-        update_campaign_status(campaign_id, "failed")
-        # Reset contacts on failure
-        for contact in contacts:
-            supabase.table("contacts").update({
-                "campaign_id": None,
-            }).eq("id", contact["id"]).execute()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to schedule calls: {str(e)}",
-        )
-
-    return {
-        "success": True,
-        "campaign_id": campaign_id,
+    campaign_data = {
+        "company_id": data.company_id,
+        "name": data.name,
         "total_contacts": total_contacts,
-        "status": "running",
+        "calls_per_minute": data.calls_per_minute,
+        "language": data.language,
+        "status": "draft",
     }
+    result = supabase.table("campaigns").insert(campaign_data).execute()
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to create campaign")
+
+    return result.data[0]
 
 
-@router.get("/{campaign_id}/stats")
-async def campaign_stats(
+@router.post("/launch/{campaign_id}")
+async def launch_campaign(
     campaign_id: str,
     user_id: str = Depends(get_current_user),
 ):
-    """Get detailed campaign statistics.
-
-    Returns:
-        campaign_id, campaign_name, status, total_contacts,
-        called, connected, hot_leads, unreachable, invalid_count,
-        avg_duration_seconds, progress_pct, connect_rate_pct,
-        launched_at, completed_at
-    """
-    # Verify ownership via campaign -> company
-    campaign = get_campaign(campaign_id)
-    if not campaign:
+    result = supabase.table("campaigns").select("*").eq("id", campaign_id).single().execute()
+    if not result.data:
         raise HTTPException(status_code=404, detail="Campaign not found")
+    verify_company_ownership(result.data["company_id"], user_id)
 
-    from services.supabase_client import verify_company_ownership
-    verify_company_ownership(campaign["company_id"], user_id)
+    success = start_campaign(campaign_id, result.data["company_id"])
+    if not success:
+        raise HTTPException(status_code=400, detail="Campaign is already running")
 
-    stats = get_campaign_stats(campaign_id)
-    if not stats:
-        raise HTTPException(status_code=404, detail="Campaign not found")
-
-    return {"success": True, "data": stats}
+    return {"success": True, "status": "running"}
 
 
-@router.post("/{campaign_id}/retry-remaining")
-async def retry_remaining_contacts(
+@router.post("/{campaign_id}/pause")
+async def pause_campaign_route(
     campaign_id: str,
     user_id: str = Depends(get_current_user),
 ):
-    """Schedule retry calls for contacts that didn't answer the first time.
-
-    Scans for pending contacts with retry_count < 3 and schedules retries.
-    """
-    campaign = get_campaign(campaign_id)
-    if not campaign:
+    result = supabase.table("campaigns").select("*").eq("id", campaign_id).single().execute()
+    if not result.data:
         raise HTTPException(status_code=404, detail="Campaign not found")
+    verify_company_ownership(result.data["company_id"], user_id)
 
-    from services.supabase_client import verify_company_ownership
-    verify_company_ownership(campaign["company_id"], user_id)
-
-    from services.supabase_client import get_retry_eligible_contacts
-    contacts = get_retry_eligible_contacts(campaign["company_id"])
-
-    if not contacts:
-        return {
-            "success": True,
-            "scheduled": 0,
-            "message": "No retry-eligible contacts found",
-        }
-
-    try:
-        from apscheduler.triggers.date import DateTrigger
-        from services.scheduler import get_scheduler
-
-        scheduler = get_scheduler()
-        scheduled = 0
-
-        for contact in contacts:
-            retry_count = contact.get("retry_count") or 0
-            job_id = f"retry_{campaign_id}_{contact['id']}_{retry_count + 1}"
-
-            # Check if job already exists
-            existing_job = scheduler.get_job(job_id)
-            if existing_job:
-                continue
-
-            # Schedule immediately with 5-second spacing
-            delay_seconds = scheduled * 5
-            run_time = datetime.now().timestamp() + delay_seconds
-
-            scheduler.add_job(
-                _place_call,
-                trigger=DateTrigger(run_date=datetime.fromtimestamp(run_time)),
-                args=[contact["phone"], campaign_id, contact["id"]],
-                id=job_id,
-                replace_existing=True,
-            )
-            scheduled += 1
-
-        return {
-            "success": True,
-            "scheduled": scheduled,
-            "total_eligible": len(contacts),
-        }
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to schedule retries: {str(e)}",
-        )
+    success = pause_campaign(campaign_id)
+    return {"success": success, "status": "paused"}
 
 
-import asyncio
+@router.post("/{campaign_id}/resume")
+async def resume_campaign_route(
+    campaign_id: str,
+    user_id: str = Depends(get_current_user),
+):
+    result = supabase.table("campaigns").select("*").eq("id", campaign_id).single().execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    verify_company_ownership(result.data["company_id"], user_id)
 
-async def _place_call(to_phone: str, campaign_id: str, contact_id: str) -> None:
-    """Place a single call in a thread pool and log it. Called by APScheduler."""
-    try:
-        call_sid = await asyncio.to_thread(make_call, to_phone, campaign_id, contact_id)
-        create_call_log(campaign_id, contact_id, call_sid, status="initiated")
-    except Exception as e:
-        print(f"Failed to place call to {to_phone}: {e}")
+    success = resume_campaign(campaign_id)
+    return {"success": success, "status": "running"}
 
 
 @router.post("/{campaign_id}/force-complete")
@@ -243,31 +128,67 @@ async def force_complete_campaign(
     campaign_id: str,
     user_id: str = Depends(get_current_user),
 ):
-    """Force-mark remaining contacts and the campaign as completed.
-
-    This:
-    1. Resets all 'queued' contacts back to 'pending' so they can
-       be called again in a future campaign
-    2. Marks the campaign as 'completed'
-
-    Useful when you want to stop a campaign early and re-use contacts.
-    """
-    campaign = get_campaign(campaign_id)
-    if not campaign:
+    result = supabase.table("campaigns").select("*").eq("id", campaign_id).single().execute()
+    if not result.data:
         raise HTTPException(status_code=404, detail="Campaign not found")
+    verify_company_ownership(result.data["company_id"], user_id)
 
-    from services.supabase_client import verify_company_ownership
-    verify_company_ownership(campaign["company_id"], user_id)
+    stop_campaign(campaign_id)
+    supabase.table("campaigns").update({
+        "status": "completed",
+        "completed_at": datetime.utcnow().isoformat(),
+    }).eq("id", campaign_id).execute()
 
-    try:
-        # Reset claimed contacts back to unassigned
-        supabase.table("contacts").update({
-            "campaign_id": None,
-        }).eq("campaign_id", campaign_id).execute()
+    return {"success": True, "status": "completed"}
 
-        # Mark campaign completed
-        update_campaign_status(campaign_id, "completed")
 
-        return {"success": True, "message": "Campaign completed. Queued contacts reset to pending."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to complete campaign: {str(e)}")
+@router.get("/call-logs/{campaign_id}")
+async def campaign_call_logs(
+    campaign_id: str,
+    user_id: str = Depends(get_current_user),
+):
+    result = supabase.table("campaigns").select("*").eq("id", campaign_id).single().execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    verify_company_ownership(result.data["company_id"], user_id)
+
+    logs = (
+        supabase.table("call_logs")
+        .select("*")
+        .eq("campaign_id", campaign_id)
+        .order("created_at", desc=True)
+        .limit(200)
+        .execute()
+    )
+
+    return {"call_logs": logs.data}
+
+
+@router.get("/stats/{campaign_id}")
+async def campaign_stats(
+    campaign_id: str,
+    user_id: str = Depends(get_current_user),
+):
+    result = supabase.table("campaigns").select("*").eq("id", campaign_id).single().execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    verify_company_ownership(result.data["company_id"], user_id)
+
+    campaign = result.data
+    total = campaign.get("total_contacts", 0) or 1
+    connected = campaign.get("connected", 0)
+    unreachable = campaign.get("unreachable", 0)
+    invalid = campaign.get("invalid_count", 0)
+    hot_leads = campaign.get("hot_leads", 0)
+    pending = max(0, total - connected - unreachable - invalid)
+
+    return {
+        "total": total,
+        "connected": connected,
+        "unreachable": unreachable,
+        "invalid": invalid,
+        "hot_leads": hot_leads,
+        "pending": pending,
+        "connection_rate": round((connected / total) * 100, 1) if total > 0 else 0,
+        "progress": round(((connected + unreachable + invalid) / total) * 100, 1) if total > 0 else 0,
+    }

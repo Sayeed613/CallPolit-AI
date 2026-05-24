@@ -1,53 +1,91 @@
-def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]:
-    """Split text into overlapping chunks of ~chunk_size words each.
+import json
+from typing import Optional
 
-    Args:
-        text: The full text to split.
-        chunk_size: Number of words per chunk (approximating 500 tokens).
-        overlap: Number of overlapping words between chunks.
-
-    Returns:
-        List of chunk strings.
-    """
-    words = text.split()
-    chunks = []
-    start = 0
-    while start < len(words):
-        end = start + chunk_size
-        chunk = " ".join(words[start:end])
-        chunks.append(chunk)
-        start += chunk_size - overlap
-    return chunks
+from services.supabase_client import supabase
+from services.gemini_service import generate_embedding
 
 
-def build_rag_context(chunks: list[dict]) -> str:
-    """Build a context string from retrieved chunks for the LLM prompt.
+def retrieve_relevant_chunks(
+    company_id: str,
+    query: str,
+    top_k: int = 5,
+    similarity_threshold: float = 0.3,
+) -> list[dict]:
+    """Retrieve relevant document chunks using vector similarity search."""
+    try:
+        query_embedding = generate_embedding(query)
+        if not query_embedding:
+            return []
 
-    Args:
-        chunks: List of dicts with at least a 'chunk_text' key
-                (e.g. from match_chunks RPC result).
+        # Use cosine similarity via pgvector
+        result = supabase.rpc(
+            "match_document_chunks",
+            {
+                "p_company_id": company_id,
+                "p_query_embedding": query_embedding,
+                "p_match_threshold": similarity_threshold,
+                "p_match_count": top_k,
+            },
+        ).execute()
 
-    Returns:
-        Concatenated context string.
-    """
-    parts = []
+        return result.data if result.data else []
+    except Exception as e:
+        print(f"RAG retrieval error: {e}")
+        return []
+
+
+def build_context(chunks: list[dict]) -> str:
+    """Build a context string from retrieved chunks."""
+    if not chunks:
+        return ""
+
+    context_parts = []
     for i, chunk in enumerate(chunks, 1):
-        parts.append(f"[{i}] {chunk['chunk_text']}")
-    return "\n\n".join(parts)
+        content = chunk.get("content", "").strip()
+        score = chunk.get("similarity", 0)
+        if content:
+            context_parts.append(f"[Document {i}] (relevance: {score:.2f})\n{content}")
+
+    return "\n\n".join(context_parts)
 
 
 def detect_escalation(text: str) -> bool:
-    """Detect if a customer query should be escalated to a human.
-
-    Returns True if escalation keywords are found.
-    NOTE: "agent" is intentionally excluded because the AI calls
-    itself "a calling agent" in its greeting, causing false positives.
-    """
-    triggers = [
-        "manager", "complaint", "angry", "not helping",
-        "speak to human", "talk to a person",
-        "supervisor", "escalate", "frustrated",
-        "mujhe kisi aur se baat", "kisi aur se karo",  # Hindi: talk to someone else
+    """Detect if a conversation needs escalation based on keywords."""
+    escalation_keywords = [
+        "manager", "supervisor", "complaint", "escalate",
+        "speak to human", "talk to human", "human agent",
+        "frustrated", "angry", "not helpful",
+        "legal", "lawsuit", "police",
+        "cancel", "terminate",
     ]
-    lower = text.lower()
-    return any(trigger in lower for trigger in triggers)
+    text_lower = text.lower()
+    return any(keyword in text_lower for keyword in escalation_keywords)
+
+
+def detect_sentiment(text: str) -> float:
+    """Simple sentiment detection returning a score 0.0-1.0."""
+    positive_words = [
+        "yes", "okay", "good", "great", "thanks", "thank you",
+        "perfect", "excellent", "fine", "sure", "correct",
+        "helpful", "appreciate", "happy", "wonderful", "agree",
+    ]
+    negative_words = [
+        "no", "not", "wrong", "bad", "terrible", "awful",
+        "frustrated", "angry", "annoyed", "useless", "stupid",
+        "hate", "worst", "never", "stop", "don't", "won't",
+    ]
+
+    text_lower = text.lower()
+    words = text_lower.split()
+
+    if not words:
+        return 0.5
+
+    positive_count = sum(1 for w in words if w in positive_words)
+    negative_count = sum(1 for w in words if w in negative_words)
+
+    total = positive_count + negative_count
+    if total == 0:
+        return 0.5
+
+    return min(max(positive_count / total, 0.0), 1.0)

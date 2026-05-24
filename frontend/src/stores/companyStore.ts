@@ -1,53 +1,70 @@
 import { create } from 'zustand'
-import { api, type Company } from '../lib/api'
+import { companyApi } from '../lib/api'
 
-interface CompanyState {
-  companies: Company[]
-  activeCompany: Company | null
-  loading: boolean
-  fetchCompanies: () => Promise<void>
-  setActiveCompany: (id: string) => void
-  updateCompany: (id: string, data: Partial<Company>) => Promise<void>
+interface Company {
+  id: string
+  name: string
+  industry: string
+  mode: string
+  verification_level: number
+  language_preference: string[]
+  escalation_phone: string
+  business_hours_start: string
+  business_hours_end: string
+  after_hours_message: string
+  twilio_phone_number: string
+  created_at: string
 }
 
-export const useCompanyStore = create<CompanyState>((set, get) => ({
-  companies: [],
-  activeCompany: null,
+interface CompanyState {
+  company: Company | null
+  loading: boolean
+  initialized: boolean
+  error: string | null
+
+  fetchCompany: () => Promise<void>
+  updateCompany: (data: Partial<Company>) => Promise<void>
+  setCompany: (company: Company) => void
+  clearCompany: () => void
+}
+
+const useCompanyStore = create<CompanyState>((set) => ({
+  company: null,
   loading: false,
+  initialized: false,
+  error: null,
 
-  fetchCompanies: async () => {
-    set({ loading: true })
+  fetchCompany: async () => {
+    set({ loading: true, error: null })
     try {
-      const data = await api.company.list()
-      const companies = data.companies
-      set({ companies })
-      if (!get().activeCompany && companies.length > 0) {
-        set({ activeCompany: companies[0] })
+      const data = await companyApi.get()
+      if (data) {
+        set({ company: data, initialized: true, loading: false })
+      } else {
+        set({ initialized: true, loading: false })
       }
-    } catch {
-      // Silently fail
-    } finally {
-      set({ loading: false })
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to fetch company'
+      set({ error: message, initialized: true, loading: false })
     }
   },
 
-  setActiveCompany: (id: string) => {
-    const company = get().companies.find((c) => c.id === id) || null
-    set({ activeCompany: company })
-  },
+  updateCompany: async (data: Partial<Company>) => {
+    const current = useCompanyStore.getState().company
+    if (!current?.id) return
 
-  updateCompany: async (id, data) => {
+    set({ loading: true, error: null })
     try {
-      await api.company.update(id, data)
-      const companies = get().companies.map((c) =>
-        c.id === id ? { ...c, ...data } : c
-      )
-      const activeCompany = get().activeCompany?.id === id
-        ? { ...get().activeCompany!, ...data }
-        : get().activeCompany
-      set({ companies, activeCompany })
-    } catch {
-      // Silently fail
+      await companyApi.update(current.id, data)
+      set({ company: { ...current, ...data }, loading: false })
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to update company'
+      set({ error: message, loading: false })
     }
   },
+
+  setCompany: (company: Company) => set({ company, initialized: true }),
+  clearCompany: () => set({ company: null, initialized: false }),
 }))
+
+export default useCompanyStore

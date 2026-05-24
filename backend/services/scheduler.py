@@ -1,123 +1,154 @@
-"""Global APScheduler singleton.
+import asyncio
+import logging
+from datetime import datetime
+from typing import Optional
 
-Created lazily on first use so the asyncio event loop is guaranteed
-to be running when the scheduler starts.
+from services.twilio_service import initiate_call
+from services.supabase_client import supabase, increment_campaign_counter, check_campaign_completion
+from config.settings import settings
 
-Includes a periodic job that scans for contacts needing retry calls.
-"""
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.interval import IntervalTrigger
+logger = logging.getLogger(__name__)
 
-_scheduler: AsyncIOScheduler | None = None
+# Track active campaign tasks
+_active_tasks: dict[str, asyncio.Task] = {}
+_paused_campaigns: set[str] = set()
 
 
-async def _scan_retry_eligible_contacts():
-    """Periodic scan for contacts that need retry calls.
-
-    Runs every 5 minutes. Finds contacts where:
-    - status = 'pending'
-    - retry_count < 3
-    - next_retry_at <= now (or NULL)
-    """
+async def run_campaign(campaign_id: str, company_id: str):
+    """Run a campaign by processing contacts at the configured rate."""
     try:
-        from services.supabase_client import get_retry_eligible_contacts, supabase
-
-        # Get all unique company_ids that have pending retries
-        result = supabase.table("contacts") \
-            .select("company_id, campaign_id") \
-            .eq("status", "pending") \
-            .lt("retry_count", 3) \
-            .neq("next_retry_at", None) \
-            .lte("next_retry_at", "now()") \
+        campaign = (
+            supabase.table("campaigns")
+            .select("*")
+            .eq("id", campaign_id)
+            .single()
             .execute()
+        )
+        if not campaign.data:
+            logger.error(f"Campaign {campaign_id} not found")
+            return
 
-        # De-duplicate and process
-        processed = set()
-        for row in result.data or []:
-            company_id = row.get("company_id")
-            if not company_id or company_id in processed:
-                continue
-            processed.add(company_id)
+        data = campaign.data
+        calls_per_minute = data.get("calls_per_minute", 5)
+        delay_between_calls = 60.0 / calls_per_minute
 
-            contacts = get_retry_eligible_contacts(company_id)
-            for contact in contacts:
-                if contact.get("next_retry_at") is None:
-                    continue  # Skip contacts without a scheduled retry time
-                # Check if there's already a running campaign for this company
-                campaign_result = supabase.table("campaigns") \
-                    .select("id") \
-                    .eq("company_id", company_id) \
-                    .eq("status", "running") \
-                    .maybe_single() \
+        contacts = (
+            supabase.table("contacts")
+            .select("*")
+            .eq("company_id", company_id)
+            .execute()
+        )
+
+        contact_list = contacts.data if contacts.data else []
+        total = len(contact_list)
+
+        supabase.table("campaigns").update({
+            "total_contacts": total,
+            "status": "running",
+            "launched_at": datetime.utcnow().isoformat(),
+        }).eq("id", campaign_id).execute()
+
+        for idx, contact in enumerate(contact_list):
+            if _paused_campaigns.isdisjoint({campaign_id}):
+                if campaign_id not in _active_tasks:
+                    break
+
+                # Initiate call via voice service
+                company = (
+                    supabase.table("companies")
+                    .select("twilio_phone")
+                    .eq("id", company_id)
+                    .single()
                     .execute()
-
-                campaign = campaign_result.data
-                if not campaign:
-                    continue
-
-                campaign_id = campaign["id"]
-                contact_id = contact["id"]
-                phone = contact.get("phone", "")
-                retry_count = (contact.get("retry_count") or 0) + 1
-
-                # Schedule the retry if not already scheduled
-                job_id = f"retry_{campaign_id}_{contact_id}_{retry_count}"
-                existing = _scheduler.get_job(job_id) if _scheduler else None
-                if existing:
-                    continue
-
-                from apscheduler.triggers.date import DateTrigger
-                _scheduler.add_job(
-                    _place_retry_call,
-                    trigger=DateTrigger(run_date=datetime.now()),
-                    args=[phone, campaign_id, contact_id],
-                    id=job_id,
-                    replace_existing=True,
                 )
+                twilio_phone = company.data.get("twilio_phone", "") if company.data else ""
+
+                # Check if Twilio is actually configured before calling
+                if not twilio_phone and not settings.TWILIO_PHONE_NUMBER:
+                    logger.error(f"Campaign {campaign_id}: No Twilio phone number configured. Stopping campaign.")
+                    supabase.table("campaigns").update({
+                        "status": "draft",
+                    }).eq("id", campaign_id).execute()
+                    break
+
+                success = await initiate_call(
+                    to_phone=contact["phone"],
+                    from_phone=twilio_phone,
+                    company_id=company_id,
+                    campaign_id=campaign_id,
+                    contact_id=contact["id"],
+                    contact_name=contact.get("name", ""),
+                )
+
+                if not success:
+                    logger.warning(f"Campaign {campaign_id}: Call to {contact['phone']} failed")
+                    # Still increment but don't stop the campaign for a single failure
+
+                await asyncio.sleep(delay_between_calls)
+            else:
+                # Campaign is paused
+                while campaign_id in _paused_campaigns:
+                    await asyncio.sleep(5)
+
+                if campaign_id not in _active_tasks:
+                    break
+
+        # Check completion
+        await asyncio.sleep(2)
+        check_campaign_completion(campaign_id)
+
+    except asyncio.CancelledError:
+        logger.info(f"Campaign {campaign_id} cancelled")
     except Exception as e:
-        import sys
-        print(f"RETRY_SCAN ERROR: {e}", file=sys.stderr)
+        logger.error(f"Campaign {campaign_id} error: {e}")
+        supabase.table("campaigns").update({
+            "status": "draft",
+        }).eq("id", campaign_id).execute()
+    finally:
+        _active_tasks.pop(campaign_id, None)
+        _paused_campaigns.discard(campaign_id)
 
 
-async def _place_retry_call(to_phone: str, campaign_id: str, contact_id: str) -> None:
-    """Place a retry call."""
-    try:
-        import asyncio
-        from services.twilio_service import make_call
-        from services.supabase_client import create_call_log, update_call_log
+def start_campaign(campaign_id: str, company_id: str) -> bool:
+    """Start a campaign asynchronously."""
+    if campaign_id in _active_tasks:
+        logger.warning(f"Campaign {campaign_id} already running")
+        return False
 
-        call_sid = await asyncio.to_thread(make_call, to_phone, campaign_id, contact_id)
-        call_log = create_call_log(campaign_id, contact_id, call_sid, status="initiated")
-        # Read retry count from contact to set on call log
-        from services.supabase_client import supabase
-        contact_data = supabase.table("contacts").select("retry_count").eq("id", contact_id).maybe_single().execute()
-        if contact_data and contact_data.data:
-            retry_number = (contact_data.data.get("retry_count") or 0) + 1
-            update_call_log(call_sid, {"retry_number": retry_number})
-    except Exception as e:
-        print(f"RETRY_CALL FAILED: {e}")
+    task = asyncio.create_task(run_campaign(campaign_id, company_id))
+    _active_tasks[campaign_id] = task
+    return True
 
 
-def get_scheduler() -> AsyncIOScheduler:
-    """Return the global AsyncIOScheduler, creating it on first call.
+def pause_campaign(campaign_id: str) -> bool:
+    """Pause a running campaign."""
+    if campaign_id not in _active_tasks:
+        return False
+    _paused_campaigns.add(campaign_id)
+    supabase.table("campaigns").update({"status": "paused"}).eq("id", campaign_id).execute()
+    return True
 
-    Also registers a periodic retry scan job.
-    """
-    global _scheduler
-    if _scheduler is None:
-        from datetime import datetime
-        _scheduler = AsyncIOScheduler()
-        _scheduler.start()
 
-        # Add periodic retry scan (every 5 minutes)
-        try:
-            _scheduler.add_job(
-                _scan_retry_eligible_contacts,
-                trigger=IntervalTrigger(minutes=5),
-                id="retry_scan",
-                replace_existing=True,
-            )
-        except Exception as e:
-            print(f"SCHEDULER INIT ERROR: {e}")
+def resume_campaign(campaign_id: str) -> bool:
+    """Resume a paused campaign."""
+    if campaign_id not in _paused_campaigns:
+        return False
+    _paused_campaigns.discard(campaign_id)
+    supabase.table("campaigns").update({"status": "running"}).eq("id", campaign_id).execute()
+    return True
 
-    return _scheduler
+
+def stop_campaign(campaign_id: str) -> bool:
+    """Stop a running campaign."""
+    task = _active_tasks.pop(campaign_id, None)
+    if task:
+        task.cancel()
+        _paused_campaigns.discard(campaign_id)
+        supabase.table("campaigns").update({"status": "completed"}).eq("id", campaign_id).execute()
+        return True
+    return False
+
+
+def get_active_campaigns() -> list[str]:
+    """Get list of currently running campaign IDs."""
+    return list(_active_tasks.keys())

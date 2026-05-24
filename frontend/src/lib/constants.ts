@@ -1,71 +1,98 @@
-export const INDUSTRIES = [
-  { value: 'banking', label: 'Banking' },
-  { value: 'telecom', label: 'Telecom' },
-  { value: 'insurance', label: 'Insurance' },
-  { value: 'healthcare', label: 'Healthcare' },
-  { value: 'ecommerce', label: 'E-Commerce' },
-  { value: 'real_estate', label: 'Real Estate' },
-  { value: 'education', label: 'Education' },
-  { value: 'other', label: 'Other' },
-] as const
+export const LANGUAGES = [
+  { value: 'hindi', label: 'Hindi', flag: '🇮🇳' },
+  { value: 'english', label: 'English', flag: '🇬🇧' },
+  { value: 'kannada', label: 'Kannada', flag: '🇮🇳' },
+  { value: 'tamil', label: 'Tamil', flag: '🇮🇳' },
+  { value: 'telugu', label: 'Telugu', flag: '🇮🇳' },
+  { value: 'malayalam', label: 'Malayalam', flag: '🇮🇳' },
+  { value: 'bengali', label: 'Bengali', flag: '🇮🇳' },
+  { value: 'gujarati', label: 'Gujarati', flag: '🇮🇳' },
+  { value: 'marathi', label: 'Marathi', flag: '🇮🇳' },
+]
 
-export const MODES = [
-  { value: 'outbound', label: 'Outbound', desc: 'Make calls to customers' },
-  { value: 'inbound', label: 'Inbound', desc: 'Receive calls from customers' },
-  { value: 'both', label: 'Both', desc: 'Complete customer support' },
-] as const
+export const INDUSTRIES = [
+  'Banking & Finance',
+  'Insurance',
+  'Healthcare',
+  'Real Estate',
+  'Education',
+  'E-commerce',
+  'Logistics',
+  'Telecommunications',
+  'Hospitality',
+  'Government Services',
+  'Retail',
+  'Manufacturing',
+  'Technology',
+  'Legal',
+  'Consulting',
+  'Other',
+]
 
 export const VERIFICATION_LEVELS = [
-  { value: 1, label: 'Basic', desc: 'Name and mobile only', icon: '🟢' },
-  { value: 2, label: 'Standard', desc: 'OTP verification', icon: '🟡' },
-  { value: 3, label: 'Strict', desc: 'Full KYC verification', icon: '🔴' },
-] as const
-
-export const LANGUAGES = [
-  { value: 'hi-IN', label: 'Hindi' },
-  { value: 'en-IN', label: 'English' },
-  { value: 'kn-IN', label: 'Kannada' },
-  { value: 'all', label: 'All Languages' },
-] as const
+  {
+    value: 1,
+    label: 'Basic',
+    description: 'Name + phone number match',
+    color: 'text-success',
+    bgColor: 'bg-success-muted',
+    borderColor: 'border-success/30',
+  },
+  {
+    value: 2,
+    label: 'Standard',
+    description: 'OTP + Date of birth verification',
+    color: 'text-warning',
+    bgColor: 'bg-warning-muted',
+    borderColor: 'border-warning/30',
+  },
+  {
+    value: 3,
+    label: 'Strict',
+    description: 'PAN + Aadhaar + Bank account details',
+    color: 'text-error',
+    bgColor: 'bg-error-muted',
+    borderColor: 'border-error/30',
+  },
+]
 
 export const CAMPAIGN_STATUSES = [
-  { value: 'running', label: 'Running' },
-  { value: 'completed', label: 'Completed' },
-  { value: 'failed', label: 'Failed' },
-  { value: 'paused', label: 'Paused' },
-  { value: 'draft', label: 'Draft' },
-] as const
+  { value: 'all', label: 'All', color: '' },
+  { value: 'running', label: 'Running', color: 'text-success' },
+  { value: 'completed', label: 'Completed', color: 'text-brand-400' },
+  { value: 'paused', label: 'Paused', color: 'text-warning' },
+  { value: 'failed', label: 'Failed', color: 'text-error' },
+  { value: 'draft', label: 'Draft', color: 'text-text-tertiary' },
+  { value: 'scheduled', label: 'Scheduled', color: 'text-info' },
+]
 
-export const APPOINTMENT_STATUSES = [
-  { value: 'scheduled', label: 'Scheduled' },
-  { value: 'confirmed', label: 'Confirmed' },
-  { value: 'completed', label: 'Completed' },
-  { value: 'cancelled', label: 'Cancelled' },
-  { value: 'no_show', label: 'No Show' },
-] as const
+export const CALL_STATUSES: Record<string, { label: string; color: string }> = {
+  'in-progress': { label: 'In Progress', color: 'text-success' },
+  completed: { label: 'Completed', color: 'text-brand-400' },
+  'no-answer': { label: 'No Answer', color: 'text-warning' },
+  busy: { label: 'Busy', color: 'text-warning' },
+  failed: { label: 'Failed', color: 'text-error' },
+  queued: { label: 'Queued', color: 'text-text-tertiary' },
+  ringing: { label: 'Ringing', color: 'text-info' },
+  missed: { label: 'Missed', color: 'text-error' },
+}
 
-export const CONTACT_STATUSES = [
-  { value: 'pending', label: 'Pending' },
-  { value: 'called', label: 'Called' },
-  { value: 'connected', label: 'Connected' },
-  { value: 'unreachable', label: 'Unreachable' },
-  { value: 'invalid', label: 'Invalid' },
-] as const
+export const APPOINTMENT_STATUSES: Record<string, { label: string; color: string }> = {
+  scheduled: { label: 'Scheduled', color: 'text-info' },
+  confirmed: { label: 'Confirmed', color: 'text-success' },
+  completed: { label: 'Completed', color: 'text-brand-400' },
+  cancelled: { label: 'Cancelled', color: 'text-error' },
+  'no-show': { label: 'No Show', color: 'text-warning' },
+}
 
-export const PLANS = [
-  { value: 'free', label: 'Free', calls: 100, contacts: 500, storage: '100 MB' },
-  { value: 'starter', label: 'Starter', calls: 1000, contacts: 5000, storage: '1 GB' },
-  { value: 'growth', label: 'Growth', calls: 10000, contacts: 50000, storage: '10 GB' },
-  { value: 'enterprise', label: 'Enterprise', calls: -1, contacts: -1, storage: 'Unlimited' },
-] as const
+export const DOCUMENT_STATUSES: Record<string, { label: string; color: string }> = {
+  processing: { label: 'Processing', color: 'text-warning' },
+  ready: { label: 'Ready', color: 'text-success' },
+  failed: { label: 'Failed', color: 'text-error' },
+}
 
-export const SIDEBAR_ITEMS = [
-  { label: 'Dashboard', path: '/dashboard', icon: 'LayoutDashboard' },
-  { label: 'Live Calls', path: '/live', icon: 'Radio', badge: 'live' },
-  { label: 'Campaigns', path: '/campaigns', icon: 'Megaphone' },
-  { label: 'Contacts', path: '/contacts', icon: 'Users' },
-  { label: 'Analytics', path: '/analytics', icon: 'BarChart3' },
-  { label: 'Documents', path: '/documents', icon: 'FileText' },
-  { label: 'Appointments', path: '/appointments', icon: 'Calendar' },
-  { label: 'Settings', path: '/settings', icon: 'Settings' },
-] as const
+export const MODE_OPTIONS = [
+  { value: 'inbound', label: 'Inbound', description: 'Receive incoming calls only' },
+  { value: 'outbound', label: 'Outbound', description: 'Make outgoing calls only' },
+  { value: 'both', label: 'Both', description: 'Inbound and outbound calling' },
+]

@@ -1,75 +1,62 @@
-import React from 'react'
-import { useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
-import { ParticleBackground } from '../components/three/ParticleBackground'
-import { Button } from '../components/ui/Button'
+import { Link } from 'react-router-dom'
+import { ArrowLeft } from 'lucide-react'
 
 export function TOS() {
-  const navigate = useNavigate()
-
   return (
-    <div className="relative min-h-screen bg-surface">
-      <ParticleBackground />
-      <div className="relative z-10 mx-auto max-w-3xl px-6 py-24">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-        >
-          <div className="mb-8">
-            <Button variant="secondary" onClick={() => navigate('/register')}>
-              ← Back
-            </Button>
-          </div>
-          <h1 className="mb-8 text-4xl font-bold text-text-primary">Terms of Service</h1>
+    <div className="min-h-screen bg-bg-base">
+      <div className="max-w-2xl mx-auto px-4 py-16">
+        <Link to="/" className="inline-flex items-center gap-2 text-sm text-text-secondary hover:text-text-primary mb-8 transition-colors">
+          <ArrowLeft size={16} />
+          Back
+        </Link>
 
-          <div className="space-y-6 text-text-secondary">
-            <section>
-              <h2 className="mb-3 text-xl font-semibold text-text-primary">1. Acceptance of Terms</h2>
-              <p className="leading-relaxed">
-                By accessing and using CallPilot AI ("the Service"), you agree to be bound by these
-                Terms of Service. If you do not agree with any part of these terms, you may not use
-                the Service.
-              </p>
-            </section>
+        <h1 className="text-2xl font-bold text-text-primary mb-6">Terms of Service</h1>
 
-            <section>
-              <h2 className="mb-3 text-xl font-semibold text-text-primary">2. Description of Service</h2>
-              <p className="leading-relaxed">
-                CallPilot AI provides AI-powered voice calling and customer support automation
-                for businesses. The Service includes outbound calling campaigns, inbound call
-                handling, customer verification, appointment scheduling, and analytics.
-              </p>
-            </section>
+        <div className="space-y-6 text-sm text-text-secondary leading-relaxed">
+          <p>
+            These Terms of Service govern your use of the CallPilot AI platform. By using our service,
+            you agree to these terms.
+          </p>
 
-            <section>
-              <h2 className="mb-3 text-xl font-semibold text-text-primary">3. Use of Service</h2>
-              <p className="leading-relaxed">
-                You agree to use the Service only for lawful purposes and in accordance with
-                applicable Indian telecommunications regulations (TRAI) and data protection
-                laws (DPDP Act 2023).
-              </p>
-            </section>
+          <h2 className="text-lg font-semibold text-text-primary">1. Service Description</h2>
+          <p>
+            CallPilot AI provides AI-powered voice calling services for businesses. We make automated
+            calls using artificial intelligence to communicate with your customers in multiple Indian languages.
+          </p>
 
-            <section>
-              <h2 className="mb-3 text-xl font-semibold text-text-primary">4. Data Privacy</h2>
-              <p className="leading-relaxed">
-                We process customer call data and personal information in accordance with our
-                Privacy Policy. You retain ownership of your data. We implement industry-standard
-                security measures to protect all data processed through the Service.
-              </p>
-            </section>
+          <h2 className="text-lg font-semibold text-text-primary">2. User Obligations</h2>
+          <p>
+            You agree to use the service in compliance with all applicable laws and regulations,
+            including telecom regulations and data protection laws. You must not use the service for
+            spam, fraud, or any illegal purpose.
+          </p>
 
-            <section>
-              <h2 className="mb-3 text-xl font-semibold text-text-primary">5. Limitation of Liability</h2>
-              <p className="leading-relaxed">
-                CallPilot AI shall not be liable for any indirect, incidental, special,
-                consequential, or punitive damages arising from your use of the Service.
-              </p>
-            </section>
-          </div>
-        </motion.div>
+          <h2 className="text-lg font-semibold text-text-primary">3. Data Privacy</h2>
+          <p>
+            We process customer data in accordance with our Privacy Policy. You retain ownership of
+            your data. We implement reasonable security measures to protect your information.
+          </p>
+
+          <h2 className="text-lg font-semibold text-text-primary">4. Service Level</h2>
+          <p>
+            We strive to maintain 99.9% uptime but do not guarantee uninterrupted service. We may
+            perform maintenance that temporarily affects availability.
+          </p>
+
+          <h2 className="text-lg font-semibold text-text-primary">5. Limitation of Liability</h2>
+          <p>
+            CallPilot AI shall not be liable for indirect, incidental, or consequential damages.
+            Our total liability shall not exceed the amount paid by you in the 12 months preceding
+            the claim.
+          </p>
+
+          <p className="text-text-tertiary mt-8">
+            Last updated: {new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
+          </p>
+        </div>
       </div>
     </div>
   )
 }
+
+export default TOS

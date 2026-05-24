@@ -1,142 +1,119 @@
-import { useCallStore, type LiveCall } from '../stores/callStore'
+type MessageHandler = (data: any) => void
 
-type EventHandler = (data: unknown) => void
-
-export class CallPilotWebSocket {
+class WebSocketManager {
   private ws: WebSocket | null = null
-  private companyId: string = ''
-  private reconnectTimeout: ReturnType<typeof setTimeout> | null = null
-  private handlers: Map<string, EventHandler[]> = new Map()
-  private shouldReconnect = true
-  private pingInterval: ReturnType<typeof setInterval> | null = null
+  private url: string = ''
+  private handlers: Map<string, Set<MessageHandler>> = new Map()
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private isConnected: boolean = false
+  private shouldReconnect: boolean = true
+  private reconnectAttempts: number = 0
+  private maxReconnectAttempts: number = 10
 
-  connect(companyId: string) {
-    this.companyId = companyId
+  connect(url: string) {
+    this.url = url
     this.shouldReconnect = true
+    this.reconnectAttempts = 0
     this._connect()
   }
 
   private _connect() {
-    if (this.ws?.readyState === WebSocket.OPEN) return
-
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const host = window.location.host
-    const url = `${protocol}//${host}/api/live/ws/${this.companyId}`
+    if (this.ws) {
+      this.ws.close()
+    }
 
     try {
-      this.ws = new WebSocket(url)
-    } catch {
-      this._scheduleReconnect()
-      return
-    }
+      this.ws = new WebSocket(this.url)
 
-    this.ws.onopen = () => {
-      useCallStore.getState().setWsConnected(true)
-      if (this.reconnectTimeout) {
-        clearTimeout(this.reconnectTimeout)
-        this.reconnectTimeout = null
+      this.ws.onopen = () => {
+        this.isConnected = true
+        this.reconnectAttempts = 0
+        this.emit('_connected', null)
       }
-      // Send ping every 30 seconds to keep connection alive
-      this.pingInterval = setInterval(() => {
-        if (this.ws?.readyState === WebSocket.OPEN) {
-          this.ws.send('ping')
-        }
-      }, 30000)
-    }
 
-    this.ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        this._emit(data.type, data.payload)
-        this._handleEvent(data.type, data)
-      } catch {
-        // Ignore malformed messages
-      }
-    }
-
-    this.ws.onclose = () => {
-      useCallStore.getState().setWsConnected(false)
-      if (this.pingInterval) {
-        clearInterval(this.pingInterval)
-        this.pingInterval = null
-      }
-      if (this.shouldReconnect) {
+      this.ws.onclose = () => {
+        this.isConnected = false
+        this.emit('_disconnected', null)
         this._scheduleReconnect()
       }
-    }
 
-    this.ws.onerror = () => {
-      this.ws?.close()
+      this.ws.onerror = () => {
+        // onclose will fire after this
+      }
+
+      this.ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data.type) {
+            this.emit(data.type, data.data || data)
+          }
+          this.emit('_message', data)
+        } catch {
+          // ignore non-JSON messages
+        }
+      }
+    } catch {
+      this._scheduleReconnect()
     }
   }
 
   private _scheduleReconnect() {
-    this.reconnectTimeout = setTimeout(() => this._connect(), 3000)
-  }
+    if (!this.shouldReconnect) return
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) return
 
-  private _handleEvent(type: string, data: { payload: LiveCall }) {
-    const store = useCallStore.getState()
-    switch (type) {
-      case 'call_start':
-        store.addActiveCall(data.payload)
-        break
-      case 'call_update':
-        store.updateActiveCall(data.payload.call_sid, data.payload)
-        break
-      case 'call_end':
-        store.removeActiveCall(data.payload.call_sid)
-        break
-      case 'transcript':
-        store.updateActiveCall(data.payload.call_sid, {
-          transcript: (data.payload as any).text || data.payload.transcript,
-        })
-        break
-    }
-  }
+    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000)
+    this.reconnectAttempts++
 
-  on(event: string, handler: EventHandler) {
-    if (!this.handlers.has(event)) {
-      this.handlers.set(event, [])
-    }
-    this.handlers.get(event)!.push(handler)
-    return () => this.off(event, handler)
-  }
-
-  off(event: string, handler: EventHandler) {
-    const handlers = this.handlers.get(event)
-    if (handlers) {
-      this.handlers.set(event, handlers.filter((h) => h !== handler))
-    }
-  }
-
-  private _emit(event: string, data: unknown) {
-    const handlers = this.handlers.get(event)
-    if (handlers) {
-      handlers.forEach((h) => h(data))
-    }
+    this.reconnectTimer = setTimeout(() => {
+      this._connect()
+    }, delay)
   }
 
   disconnect() {
     this.shouldReconnect = false
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout)
-      this.reconnectTimeout = null
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
     }
-    if (this.pingInterval) {
-      clearInterval(this.pingInterval)
-      this.pingInterval = null
+    if (this.ws) {
+      this.ws.close()
+      this.ws = null
     }
-    this.ws?.close()
-    this.ws = null
-    useCallStore.getState().setWsConnected(false)
+    this.isConnected = false
+  }
+
+  send(data: Record<string, any>) {
+    if (this.ws && this.isConnected) {
+      this.ws.send(JSON.stringify(data))
+    }
+  }
+
+  on(event: string, handler: MessageHandler) {
+    if (!this.handlers.has(event)) {
+      this.handlers.set(event, new Set())
+    }
+    this.handlers.get(event)!.add(handler)
+    return () => this.off(event, handler)
+  }
+
+  off(event: string, handler: MessageHandler) {
+    this.handlers.get(event)?.delete(handler)
+  }
+
+  private emit(event: string, data: any) {
+    this.handlers.get(event)?.forEach((handler) => {
+      try {
+        handler(data)
+      } catch {
+        // handler error
+      }
+    })
+  }
+
+  get connected(): boolean {
+    return this.isConnected
   }
 }
 
-let _instance: CallPilotWebSocket | null = null
-
-export function getWebSocket(): CallPilotWebSocket {
-  if (!_instance) {
-    _instance = new CallPilotWebSocket()
-  }
-  return _instance
-}
+export const wsManager = new WebSocketManager()
+export default wsManager

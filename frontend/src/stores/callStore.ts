@@ -1,65 +1,80 @@
 import { create } from 'zustand'
+import { liveApi } from '../lib/api'
 
-import type { LiveCall as ApiLiveCall } from '../lib/api'
-
-// Re-export to ensure type consistency with API response
-export type LiveCall = ApiLiveCall
-
-interface CallState {
-  activeCalls: LiveCall[]
-  recentCalls: LiveCall[]
-  loading: boolean
-  wsConnected: boolean
-  fetchActiveCalls: (companyId: string) => Promise<void>
-  addActiveCall: (call: LiveCall) => void
-  updateActiveCall: (callSid: string, updates: Partial<LiveCall>) => void
-  removeActiveCall: (callSid: string) => void
-  setWsConnected: (connected: boolean) => void
+interface Call {
+  id: string
+  campaign_id: string
+  contact_phone: string
+  contact_name: string
+  status: string
+  duration: number
+  language: string
+  sentiment_score: number
+  verification_status: string
+  transcript: any[]
+  started_at: string
+  direction: string
 }
 
-export const useCallStore = create<CallState>((set, get) => ({
-  activeCalls: [],
-  recentCalls: [],
-  loading: false,
-  wsConnected: false,
+interface CallState {
+  activeCalls: Call[]
+  stats: {
+    total_today: number
+    connected_today: number
+    active_calls: number
+    active_campaigns: number
+  } | null
+  loading: boolean
+  error: string | null
+  lastUpdated: number
 
-  fetchActiveCalls: async (companyId) => {
-    set({ loading: true })
+  fetchActiveCalls: () => Promise<void>
+  fetchStats: () => Promise<void>
+  addCall: (call: Call) => void
+  updateCall: (callId: string, data: Partial<Call>) => void
+  removeCall: (callId: string) => void
+}
+
+const useCallStore = create<CallState>((set) => ({
+  activeCalls: [],
+  stats: null,
+  loading: false,
+  error: null,
+  lastUpdated: 0,
+
+  fetchActiveCalls: async () => {
     try {
-      const { api } = await import('../lib/api')
-      const data = await api.live.getActiveCalls(companyId)
-      set({ activeCalls: data.calls || [] })
-    } catch {
-      // Silently fail
-    } finally {
-      set({ loading: false })
+      const data = await liveApi.calls()
+      set({ activeCalls: data.calls || [], lastUpdated: Date.now() })
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to fetch calls'
+      set({ error: message })
     }
   },
 
-  addActiveCall: (call) => {
-    set((state) => ({ activeCalls: [...state.activeCalls, call] }))
+  fetchStats: async () => {
+    try {
+      const data = await liveApi.stats()
+      set({ stats: data, lastUpdated: Date.now() })
+    } catch {
+      // silently fail
+    }
   },
 
-  updateActiveCall: (callSid, updates) => {
+  addCall: (call: Call) =>
+    set((state) => ({ activeCalls: [call, ...state.activeCalls] })),
+
+  updateCall: (callId: string, data: Partial<Call>) =>
     set((state) => ({
       activeCalls: state.activeCalls.map((c) =>
-        c.call_sid === callSid ? { ...c, ...updates } : c
+        c.id === callId ? { ...c, ...data } : c
       ),
-    }))
-  },
+    })),
 
-  removeActiveCall: (callSid) => {
-    set((state) => {
-      const call = state.activeCalls.find((c) => c.call_sid === callSid)
-      const remaining = state.activeCalls.filter((c) => c.call_sid !== callSid)
-      return {
-        activeCalls: remaining,
-        recentCalls: call
-          ? [call, ...state.recentCalls].slice(0, 50)
-          : state.recentCalls,
-      }
-    })
-  },
-
-  setWsConnected: (connected) => set({ wsConnected: connected }),
+  removeCall: (callId: string) =>
+    set((state) => ({
+      activeCalls: state.activeCalls.filter((c) => c.id !== callId),
+    })),
 }))
+
+export default useCallStore

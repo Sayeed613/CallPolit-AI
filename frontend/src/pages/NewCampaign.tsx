@@ -1,183 +1,129 @@
-import React, { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
-import { Button } from '../components/ui/Button'
-import { Input } from '../components/ui/Input'
-import { Select } from '../components/ui/Select'
-import { Card } from '../components/ui/Card'
-import { PageWrapper } from '../components/layout/PageWrapper'
-import { api } from '../lib/api'
-import { useCompanyStore } from '../stores/companyStore'
-
-interface ContactList {
-  id: string
-  name: string
-  count: number
-}
+import { ArrowLeft, Play } from 'lucide-react'
+import Card, { CardHeader, CardTitle } from '../components/ui/Card'
+import Button from '../components/ui/Button'
+import Input from '../components/ui/Input'
+import Select from '../components/ui/Select'
+import { useToast } from '../components/ui/Toast'
+import { campaignsApi } from '../lib/api'
+import useCompanyStore from '../stores/companyStore'
+import { LANGUAGES } from '../lib/constants'
 
 export function NewCampaign() {
   const navigate = useNavigate()
-  const { activeCompany } = useCompanyStore()
+  const { company } = useCompanyStore()
+  const { addToast } = useToast()
   const [loading, setLoading] = useState(false)
-  const [contactLists, setContactLists] = useState<ContactList[]>([])
-  const [error, setError] = useState('')
-
   const [form, setForm] = useState({
     name: '',
-    contactListId: '',
-    callsPerMinute: 5,
-    scheduleType: 'now' as 'now' | 'scheduled',
-    scheduledDate: '',
-    scheduledTime: '',
-    languageOverride: 'auto',
+    calls_per_minute: 5,
+    language: 'auto',
+    schedule_type: 'now' as 'now' | 'later',
   })
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const res = await api.contacts.list(activeCompany?.id || '')
-        setContactLists([
-          { id: 'all', name: 'All Contacts', count: res.count || 0 },
-        ])
-      } catch {
-        // fallback
-      }
-    }
-    load()
-  }, [activeCompany?.id])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!form.name || !form.contactListId) {
-      setError('Please fill in all required fields')
-      return
-    }
+    if (!company?.id || !form.name) return
+
     setLoading(true)
-    setError('')
     try {
-      const campaign = await api.campaigns.launch(activeCompany?.id || '', form.name, form.callsPerMinute)
-      navigate(`/campaigns/${campaign.campaign_id}`)
+      const result = await campaignsApi.create({
+        company_id: company.id,
+        ...form,
+      })
+      await campaignsApi.launch(result.id)
+      addToast({ type: 'success', message: 'Campaign launched!' })
+      navigate(`/campaigns/${result.id}`)
     } catch (err: any) {
-      setError(err?.message || 'Failed to create campaign')
-    } finally {
-      setLoading(false)
+      addToast({ type: 'error', message: err.message || 'Failed to create campaign' })
     }
+    setLoading(false)
   }
 
   return (
-    <PageWrapper
-      title="Launch Campaign"
-      subtitle="Configure and launch a new outbound calling campaign"
-      actions={
-        <Button variant="secondary" onClick={() => navigate('/campaigns')}>
-          Cancel
-        </Button>
-      }
-    >
-      <div className="mx-auto max-w-2xl">
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <Card className="p-6">
-            <h3 className="mb-4 text-lg font-semibold text-text-primary">Campaign Details</h3>
-            <div className="space-y-4">
-              <Input
-                label="Campaign Name"
-                placeholder="e.g., Winter Promotions"
-                value={form.name}
-                onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-                required
-              />
-              <Select
-                label="Contact List"
-                options={contactLists.map((cl) => ({
-                  value: cl.id,
-                  label: `${cl.name} (${cl.count} contacts)`,
-                }))}
-                value={form.contactListId}
-                onChange={(v) => setForm((p) => ({ ...p, contactListId: v }))}
-                placeholder="Select contact list"
-              />
-            </div>
-          </Card>
+    <div className="max-w-2xl mx-auto space-y-6">
+      <button onClick={() => navigate('/campaigns')} className="flex items-center gap-2 text-sm text-text-secondary hover:text-text-primary transition-colors">
+        <ArrowLeft size={16} />
+        Back to campaigns
+      </button>
 
-          <Card className="p-6">
-            <h3 className="mb-4 text-lg font-semibold text-text-primary">Call Settings</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-text-secondary">
-                  Calls per minute: {form.callsPerMinute}
-                </label>
-                <input
-                  type="range"
-                  min={1}
-                  max={10}
-                  value={form.callsPerMinute}
-                  onChange={(e) => setForm((p) => ({ ...p, callsPerMinute: parseInt(e.target.value) }))}
-                  className="w-full accent-brand-500"
-                />
-                <div className="flex justify-between text-xs text-text-muted">
-                  <span>1</span>
-                  <span>10</span>
-                </div>
-              </div>
-              <Select
-                label="Schedule"
-                options={[
-                  { value: 'now', label: 'Launch Now' },
-                  { value: 'scheduled', label: 'Schedule for later' },
-                ]}
-                value={form.scheduleType}
-                onChange={(v) => setForm((p) => ({ ...p, scheduleType: v as 'now' | 'scheduled' }))}
-              />
-              {form.scheduleType === 'scheduled' && (
-                <div className="grid grid-cols-2 gap-4">
-                  <Input
-                    label="Date"
-                    type="date"
-                    value={form.scheduledDate}
-                    onChange={(e) => setForm((p) => ({ ...p, scheduledDate: e.target.value }))}
-                  />
-                  <Input
-                    label="Time"
-                    type="time"
-                    value={form.scheduledTime}
-                    onChange={(e) => setForm((p) => ({ ...p, scheduledTime: e.target.value }))}
-                  />
-                </div>
-              )}
-              <Select
-                label="Language Override (optional)"
-                options={[
-                  { value: 'auto', label: 'Auto-detect' },
-                  { value: 'hi-IN', label: 'Hindi' },
-                  { value: 'en-IN', label: 'English' },
-                  { value: 'kn-IN', label: 'Kannada' },
-                ]}
-                value={form.languageOverride}
-                onChange={(v) => setForm((p) => ({ ...p, languageOverride: v }))}
-              />
-            </div>
-          </Card>
-
-          {error && (
-            <motion.p
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="text-sm text-red-400"
-            >
-              {error}
-            </motion.p>
-          )}
-
-          <div className="flex justify-end gap-3">
-            <Button variant="secondary" onClick={() => navigate('/campaigns')}>
-              Cancel
-            </Button>
-            <Button type="submit" loading={loading}>
-              Launch Campaign
-            </Button>
-          </div>
-        </form>
+      <div>
+        <h1 className="text-xl font-bold text-text-primary">New Campaign</h1>
+        <p className="text-sm text-text-tertiary mt-1">Configure your outbound calling campaign</p>
       </div>
-    </PageWrapper>
+
+      <form onSubmit={handleSubmit}>
+        <Card>
+          <div className="space-y-4">
+            <Input
+              label="Campaign Name"
+              value={form.name}
+              onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+              placeholder="e.g., Q1 Follow-up Calls"
+              required
+            />
+
+            <Select
+              label="Language"
+              value={form.language}
+              onChange={(e) => setForm((p) => ({ ...p, language: e.target.value }))}
+              options={[
+                { value: 'auto', label: 'Auto-detect' },
+                ...LANGUAGES.map((l) => ({ value: l.value, label: l.label })),
+              ]}
+            />
+
+            <div>
+              <label className="block text-sm text-text-secondary mb-2">
+                Calls per minute: {form.calls_per_minute}
+              </label>
+              <input
+                type="range"
+                min="1"
+                max="20"
+                value={form.calls_per_minute}
+                onChange={(e) => setForm((p) => ({ ...p, calls_per_minute: Number(e.target.value) }))}
+                className="w-full accent-brand-500"
+              />
+              <div className="flex justify-between text-xs text-text-tertiary">
+                <span>1 (slow)</span>
+                <span>20 (fast)</span>
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <Button
+                type="button"
+                variant={form.schedule_type === 'now' ? 'primary' : 'secondary'}
+                className="flex-1"
+                onClick={() => setForm((p) => ({ ...p, schedule_type: 'now' }))}
+              >
+                Start Now
+              </Button>
+              <Button
+                type="button"
+                variant={form.schedule_type === 'later' ? 'primary' : 'secondary'}
+                className="flex-1"
+                onClick={() => setForm((p) => ({ ...p, schedule_type: 'later' }))}
+              >
+                Schedule Later
+              </Button>
+            </div>
+          </div>
+        </Card>
+
+        <div className="flex gap-3 justify-end mt-6">
+          <Button variant="secondary" onClick={() => navigate('/campaigns')}>
+            Cancel
+          </Button>
+          <Button type="submit" loading={loading} icon={<Play size={16} />}>
+            Launch Campaign
+          </Button>
+        </div>
+      </form>
+    </div>
   )
 }
+
+export default NewCampaign

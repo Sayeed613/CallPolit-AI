@@ -1,31 +1,54 @@
-import React from 'react'
+import { motion } from 'framer-motion'
+import Sidebar from './Sidebar'
+import TopBar from './TopBar'
+import MobileNav from './MobileNav'
+import useUIStore from '../../stores/uiStore'
+import ToastProvider from '../ui/Toast'
 import { cn } from '../../lib/utils'
 
 interface PageWrapperProps {
   children: React.ReactNode
-  title?: string
-  subtitle?: string
-  actions?: React.ReactNode
-  className?: string
 }
 
-export function PageWrapper({ children, title, subtitle, actions, className }: PageWrapperProps) {
+const pageVariants = {
+  initial: { opacity: 0, y: 8 },
+  animate: { opacity: 1, y: 0, transition: { duration: 0.3, ease: [0.16, 1, 0.3, 1] } },
+  exit: { opacity: 0, y: -8, transition: { duration: 0.2 } },
+}
+
+export function PageWrapper({ children }: PageWrapperProps) {
+  const { sidebarCollapsed } = useUIStore()
+
   return (
-    <div className={cn('mx-auto w-full max-w-7xl px-6 py-8', className)}>
-      {(title || actions) && (
-        <div className="mb-8 flex items-start justify-between">
-          <div>
-            {title && (
-              <h1 className="text-2xl font-semibold text-text-primary">{title}</h1>
-            )}
-            {subtitle && (
-              <p className="mt-1 text-sm text-text-muted">{subtitle}</p>
-            )}
-          </div>
-          {actions && <div className="flex items-center gap-3">{actions}</div>}
+    <ToastProvider>
+      <div className="min-h-screen bg-bg-base">
+        <Sidebar />
+
+        <div
+          className={cn(
+            'transition-all duration-200 lg:ml-64',
+            sidebarCollapsed && 'lg:ml-14',
+          )}
+        >
+          <TopBar />
+
+          <main className="pb-20 lg:pb-0">
+            <motion.div
+              variants={pageVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              className="p-4 lg:p-6"
+            >
+              {children}
+            </motion.div>
+          </main>
         </div>
-      )}
-      {children}
-    </div>
+
+        <MobileNav />
+      </div>
+    </ToastProvider>
   )
 }
+
+export default PageWrapper

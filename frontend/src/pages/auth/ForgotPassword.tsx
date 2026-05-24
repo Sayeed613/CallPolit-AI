@@ -1,97 +1,102 @@
-import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { ParticleBackground } from '../../components/three/ParticleBackground'
-import { Button } from '../../components/ui/Button'
-import { Input } from '../../components/ui/Input'
-import { supabase } from '../../lib/supabase'
+import { Phone, ArrowLeft, Mail, CheckCircle } from 'lucide-react'
+import Button from '../../components/ui/Button'
+import Input from '../../components/ui/Input'
+import useAuthStore from '../../stores/authStore'
 
 export function ForgotPassword() {
-  const navigate = useNavigate()
+  const { resetPassword, loading, error, clearError } = useAuthStore()
   const [email, setEmail] = useState('')
-  const [loading, setLoading] = useState(false)
   const [sent, setSent] = useState(false)
-  const [error, setError] = useState('')
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setLoading(true)
-    setError('')
-    try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/login`,
-      })
-      if (error) throw error
-      setSent(true)
-    } catch (err: any) {
-      setError(err?.message || 'Failed to send reset email')
-    } finally {
-      setLoading(false)
-    }
+    clearError()
+    await resetPassword(email)
+    setSent(true)
   }
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-surface">
-      <ParticleBackground />
+    <div className="min-h-screen bg-bg-base flex items-center justify-center p-4">
       <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.5 }}
-        className="relative z-10 w-full max-w-md"
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+        className="w-full max-w-sm"
       >
-        <div className="rounded-2xl border border-surface-border/50 bg-surface-card/80 p-8 shadow-2xl shadow-black/30 backdrop-blur-xl">
-          <div className="mb-8 text-center">
-            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-accent-600 shadow-lg shadow-brand-500/20">
-              <span className="text-2xl">🔑</span>
-            </div>
-            <h1 className="text-2xl font-bold text-text-primary">Reset Password</h1>
-            <p className="mt-1 text-sm text-text-muted">We'll send you a reset link</p>
+        {/* Logo */}
+        <div className="flex flex-col items-center mb-8">
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center shadow-glow mb-4">
+            <Phone size={24} className="text-white" />
           </div>
+          <h1 className="text-xl font-bold text-text-primary">Reset password</h1>
+          <p className="text-sm text-text-tertiary mt-1">
+            {sent ? 'Check your email for the reset link' : "Enter your email and we'll send you a reset link"}
+          </p>
+        </div>
 
+        <div className="bg-bg-card border border-border-default rounded-xl p-6">
           {sent ? (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="text-center"
-            >
-              <div className="mb-4 rounded-lg bg-emerald-500/10 p-4">
-                <p className="text-sm text-emerald-400">
-                  Reset link sent! Check your email.
-                </p>
-              </div>
-              <Button variant="secondary" onClick={() => navigate('/login')} className="w-full">
-                Back to Login
-              </Button>
-            </motion.div>
+            <div className="text-center py-4">
+              <motion.div
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+                className="w-16 h-16 rounded-full bg-success-muted border border-success/20 flex items-center justify-center mx-auto mb-4"
+              >
+                <CheckCircle size={32} className="text-success" />
+              </motion.div>
+              <p className="text-sm text-text-secondary mb-6">
+                If an account exists with that email, we've sent a password reset link.
+              </p>
+              <Link to="/login">
+                <Button variant="secondary" className="w-full">
+                  <ArrowLeft size={16} />
+                  Back to sign in
+                </Button>
+              </Link>
+            </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
               <Input
                 label="Email"
                 type="email"
-                placeholder="you@company.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                icon={<Mail size={16} />}
+                placeholder="you@company.com"
                 required
+                disabled={loading}
               />
+
               {error && (
-                <p className="text-sm text-red-400">{error}</p>
+                <motion.p
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="text-xs text-error"
+                >
+                  {error}
+                </motion.p>
               )}
-              <Button type="submit" className="w-full" loading={loading}>
-                Send Reset Link
+
+              <Button type="submit" loading={loading} className="w-full">
+                Send reset link
               </Button>
+
+              <Link to="/login">
+                <Button variant="ghost" className="w-full mt-2">
+                  <ArrowLeft size={16} />
+                  Back to sign in
+                </Button>
+              </Link>
             </form>
           )}
-
-          <div className="mt-6 text-center">
-            <button
-              onClick={() => navigate('/login')}
-              className="text-sm text-text-muted transition-colors hover:text-brand-400"
-            >
-              Back to Login
-            </button>
-          </div>
         </div>
       </motion.div>
     </div>
   )
 }
+
+export default ForgotPassword

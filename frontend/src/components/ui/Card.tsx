@@ -1,34 +1,25 @@
-import React from 'react'
-import { motion } from 'framer-motion'
 import { cn } from '../../lib/utils'
 
 interface CardProps {
   children: React.ReactNode
   className?: string
-  hover?: boolean
-  glow?: boolean
-  glass?: boolean
+  variant?: 'default' | 'glass' | 'interactive'
   onClick?: () => void
 }
 
-export function Card({ children, className, hover = false, glow = false, glass = false, onClick }: CardProps) {
-  const Component = onClick ? motion.button : motion.div
+const variantStyles = {
+  default: 'bg-bg-card border border-border-subtle rounded-xl',
+  glass: 'bg-white/[0.03] backdrop-blur-xl border border-white/[0.08] rounded-xl',
+  interactive: 'bg-bg-card border border-border-subtle rounded-xl cursor-pointer hover:border-border-default transition-all duration-150 hover:shadow-elevated',
+}
+
+export function Card({ children, className, variant = 'default', onClick }: CardProps) {
+  const Component = onClick ? 'button' : 'div'
 
   return (
     <Component
-      whileHover={hover ? { y: -2 } : undefined}
       onClick={onClick}
-      className={cn(
-        'rounded-card p-5 border transition-all duration-200 shadow-card',
-        glass
-          ? 'bg-surface-card/60 backdrop-blur-xl border-white/[0.06]'
-          : glow
-            ? 'bg-surface-card border-brand-500/20 shadow-glow-indigo'
-            : 'bg-surface-card border-surface-border',
-        hover && !glass && 'hover:shadow-card-hover hover:border-brand-500/20',
-        onClick && 'cursor-pointer',
-        className
-      )}
+      className={cn(variantStyles[variant], 'p-5 text-left', className)}
     >
       {children}
     </Component>
@@ -40,17 +31,15 @@ export function CardHeader({ children, className }: { children: React.ReactNode;
 }
 
 export function CardTitle({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <h3 className={cn('text-lg font-semibold text-white', className)}>{children}</h3>
+  return <h3 className={cn('text-base font-semibold text-text-primary', className)}>{children}</h3>
 }
 
 export function CardDescription({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <p className={cn('text-sm text-zinc-400', className)}>{children}</p>
+  return <p className={cn('text-sm text-text-secondary', className)}>{children}</p>
 }
 
 export function CardContent({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <div className={cn('', className)}>{children}</div>
+  return <div className={cn(className)}>{children}</div>
 }
 
-export function CardFooter({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <div className={cn('flex items-center justify-between mt-4 pt-4 border-t border-surface-border', className)}>{children}</div>
-}
+export default Card

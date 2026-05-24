@@ -7,23 +7,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:5050',
+        target: 'http://localhost:5054',
         changeOrigin: true,
-      },
-      '/ws': {
-        target: 'ws://localhost:5050',
-        ws: true,
-      },
-    },
-  },
-  build: {
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          'vendor': ['react', 'react-dom', 'react-router-dom'],
-          'ui': ['framer-motion', 'lucide-react', 'recharts'],
-          'three': ['three', '@types/three'],
-        },
       },
     },
   },

@@ -1,130 +1,171 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
-import { Button } from '../components/ui/Button'
-import { Card } from '../components/ui/Card'
-import { Badge } from '../components/ui/Badge'
-import { Skeleton } from '../components/ui/Skeleton'
-import { PageWrapper } from '../components/layout/PageWrapper'
-import { api } from '../lib/api'
+import { ArrowLeft, Phone, Mail, Star, Calendar, Shield, Edit3 } from 'lucide-react'
+import Card, { CardHeader, CardTitle } from '../components/ui/Card'
+import Badge from '../components/ui/Badge'
+import Button from '../components/ui/Button'
+import Input from '../components/ui/Input'
+import { SkeletonCard } from '../components/ui/Skeleton'
+import { contactsApi } from '../lib/api'
+import { formatDateTime, maskPhone, maskEmail, formatDuration } from '../lib/utils'
+import { useToast } from '../components/ui/Toast'
 
 export function ContactDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const { addToast } = useToast()
   const [contact, setContact] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  const [editing, setEditing] = useState(false)
+  const [editForm, setEditForm] = useState({ name: '', email: '', notes: '' })
 
   useEffect(() => {
-    async function load() {
-      if (!id) return
+    if (!id) return
+    const load = async () => {
       try {
-        const data = await api.contacts.get(id)
+        const data = await contactsApi.get(id)
         setContact(data)
+        setEditForm({ name: data.name || '', email: data.email || '', notes: data.notes || '' })
       } catch {
         // fallback
-      } finally {
-        setLoading(false)
       }
+      setLoading(false)
     }
     load()
   }, [id])
 
+  const handleSave = async () => {
+    if (!id) return
+    try {
+      await contactsApi.update(id, editForm)
+      setContact((prev: any) => ({ ...prev, ...editForm }))
+      setEditing(false)
+      addToast({ type: 'success', message: 'Contact updated' })
+    } catch (err: any) {
+      addToast({ type: 'error', message: err.message })
+    }
+  }
+
   if (loading) {
     return (
-      <PageWrapper title="">
-        <Skeleton className="mb-4 h-8 w-64" />
-        <Skeleton className="h-96 w-full rounded-xl" />
-      </PageWrapper>
+      <div className="space-y-4">
+        <SkeletonCard />
+        <SkeletonCard />
+      </div>
     )
   }
 
   if (!contact) {
     return (
-      <PageWrapper title="Contact not found">
-        <Button variant="secondary" onClick={() => navigate('/contacts')}>
-          ← Back to Contacts
+      <div className="text-center py-16">
+        <p className="text-text-secondary">Contact not found</p>
+        <Button variant="secondary" className="mt-4" onClick={() => navigate('/contacts')}>
+          Back to contacts
         </Button>
-      </PageWrapper>
+      </div>
     )
   }
 
   return (
-    <PageWrapper
-      title={contact.name || 'Contact Details'}
-      subtitle={contact.phone?.replace(/(\d{2})(\d{4})(\d{4})/, '$1****$3')}
-      actions={
-        <Button variant="secondary" onClick={() => navigate('/contacts')}>
-          ← Back
-        </Button>
-      }
-    >
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* Profile */}
-        <Card className="p-6">
-          <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-accent-600 text-3xl">
-            {contact.name?.[0] || '?'}
-          </div>
-          <h2 className="mb-1 text-xl font-bold text-text-primary">{contact.name || 'Unknown'}</h2>
-          <div className="mb-4 flex items-center gap-2">
-            {contact.is_vip && <Badge variant="brand">VIP</Badge>}
-            <Badge variant={contact.status === 'connected' ? 'success' : 'default'}>
-              {contact.status || 'pending'}
-            </Badge>
-          </div>
-          <div className="space-y-2 text-sm text-text-secondary">
-            <p>📞 {contact.phone || '-'}</p>
-            <p>✉ {contact.email || '-'}</p>
-            <p>📅 KYC: {contact.kyc_status || 'pending'}</p>
-            <p>⚠ Risk Score: {contact.risk_score || 0}</p>
-          </div>
-        </Card>
+    <div className="max-w-3xl mx-auto space-y-6">
+      <button onClick={() => navigate('/contacts')} className="flex items-center gap-2 text-sm text-text-secondary hover:text-text-primary transition-colors">
+        <ArrowLeft size={16} />
+        Back to contacts
+      </button>
 
-        {/* Details */}
-        <Card className="p-6 lg:col-span-2">
-          <h3 className="mb-4 text-lg font-semibold text-text-primary">Contact Information</h3>
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="rounded-lg bg-surface-secondary p-3">
-                <p className="text-xs text-text-muted">Account Number</p>
-                <p className="font-medium text-text-primary">{contact.account_number || '-'}</p>
-              </div>
-              <div className="rounded-lg bg-surface-secondary p-3">
-                <p className="text-xs text-text-muted">Policy Number</p>
-                <p className="font-medium text-text-primary">{contact.policy_number || '-'}</p>
-              </div>
-              <div className="rounded-lg bg-surface-secondary p-3">
-                <p className="text-xs text-text-muted">Date of Birth</p>
-                <p className="font-medium text-text-primary">{contact.date_of_birth || '-'}</p>
-              </div>
-              <div className="rounded-lg bg-surface-secondary p-3">
-                <p className="text-xs text-text-muted">Customer ID</p>
-                <p className="font-medium text-text-primary">{contact.customer_id || '-'}</p>
+      {/* Profile card */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center">
+              <span className="text-lg font-bold text-white">{contact.name?.[0] || '?'}</span>
+            </div>
+            <div>
+              {editing ? (
+                <Input
+                  value={editForm.name}
+                  onChange={(e) => setEditForm((p) => ({ ...p, name: e.target.value }))}
+                  className="mb-1"
+                />
+              ) : (
+                <h1 className="text-lg font-bold text-text-primary">{contact.name || 'Unknown'}</h1>
+              )}
+              <div className="flex items-center gap-2 mt-1">
+                <Badge variant={contact.status === 'active' ? 'success' : 'default'} size="sm">{contact.status}</Badge>
+                {contact.is_vip && <Badge variant="warning" size="sm">VIP</Badge>}
+                <Badge variant={contact.verified ? 'success' : 'default'} size="sm" dot={contact.verified}>
+                  {contact.verified ? `Verified L${contact.verification_level}` : 'Unverified'}
+                </Badge>
               </div>
             </div>
           </div>
+          <Button variant="ghost" size="sm" onClick={() => setEditing(!editing)} icon={<Edit3 size={14} />}>
+            {editing ? 'Cancel' : 'Edit'}
+          </Button>
+        </CardHeader>
 
-          <h3 className="mb-4 mt-6 text-lg font-semibold text-text-primary">Outstanding Dues</h3>
-          <div className="rounded-lg bg-yellow-500/10 p-4">
-            <p className="text-2xl font-bold text-yellow-400">
-              ₹{contact.outstanding_dues?.toLocaleString() || '0'}
-            </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+          <div className="flex items-center gap-3 p-3 rounded-lg bg-bg-surface">
+            <Phone size={16} className="text-text-tertiary" />
+            <div>
+              <p className="text-xs text-text-tertiary">Phone</p>
+              <p className="text-sm text-text-primary font-mono">{maskPhone(contact.phone)}</p>
+            </div>
           </div>
+          <div className="flex items-center gap-3 p-3 rounded-lg bg-bg-surface">
+            <Mail size={16} className="text-text-tertiary" />
+            <div>
+              <p className="text-xs text-text-tertiary">Email</p>
+              {editing ? (
+                <Input
+                  value={editForm.email}
+                  onChange={(e) => setEditForm((p) => ({ ...p, email: e.target.value }))}
+                />
+              ) : (
+                <p className="text-sm text-text-primary">{contact.email || '-'}</p>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-3 p-3 rounded-lg bg-bg-surface">
+            <Calendar size={16} className="text-text-tertiary" />
+            <div>
+              <p className="text-xs text-text-tertiary">Last Called</p>
+              <p className="text-sm text-text-primary">{contact.last_called ? formatDateTime(contact.last_called) : 'Never'}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 p-3 rounded-lg bg-bg-surface">
+            <Shield size={16} className="text-text-tertiary" />
+            <div>
+              <p className="text-xs text-text-tertiary">Verification Level</p>
+              <p className="text-sm text-text-primary">{contact.verification_level || 0}</p>
+            </div>
+          </div>
+        </div>
 
-          {contact.open_tickets?.length > 0 && (
-            <>
-              <h3 className="mb-4 mt-6 text-lg font-semibold text-text-primary">Open Tickets</h3>
-              <div className="space-y-2">
-                {contact.open_tickets.map((ticket: any, i: number) => (
-                  <div key={i} className="rounded-lg bg-surface-secondary p-3">
-                    <p className="text-sm text-text-primary">{ticket.subject || `Ticket #${i + 1}`}</p>
-                    <p className="text-xs text-text-muted">{ticket.status || 'open'}</p>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </Card>
-      </div>
-    </PageWrapper>
+        {editing && (
+          <div className="mt-4">
+            <label className="block text-sm text-text-secondary mb-1">Notes</label>
+            <textarea
+              value={editForm.notes}
+              onChange={(e) => setEditForm((p) => ({ ...p, notes: e.target.value }))}
+              className="w-full bg-bg-surface border border-border-default rounded-lg p-3 text-sm text-text-primary outline-none focus:border-brand-500/50 transition-colors resize-none h-24"
+            />
+            <div className="flex justify-end mt-3">
+              <Button onClick={handleSave}>Save Changes</Button>
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* Call history */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Call History</CardTitle>
+        </CardHeader>
+        <p className="text-sm text-text-tertiary text-center py-8">No call history available</p>
+      </Card>
+    </div>
   )
 }
+
+export default ContactDetail
