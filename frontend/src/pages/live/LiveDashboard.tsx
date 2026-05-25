@@ -8,8 +8,6 @@ import { SkeletonCard } from '../../components/ui/Skeleton'
 import Modal from '../../components/ui/Modal'
 import { liveApi } from '../../lib/api'
 import { formatDuration, maskPhone } from '../../lib/utils'
-import waveBackground from '../../components/three/WaveBackground'
-import WaveBackground from '../../components/three/WaveBackground'
 
 interface LiveCall {
   id: string
@@ -80,9 +78,7 @@ export function LiveDashboard() {
 
   return (
     <div className="relative">
-      <WaveBackground />
-
-      <div className="relative z-10 space-y-6">
+      <div className="relative space-y-6">
         {/* Hero stats */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-8">
           <div>

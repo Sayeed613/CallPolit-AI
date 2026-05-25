@@ -1,13 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from services.supabase_client import supabase, verify_company_ownership
 from services.auth_middleware import get_current_user
 from services.scheduler import start_campaign, pause_campaign, resume_campaign, stop_campaign
 
 router = APIRouter()
+limiter = Limiter(key_func=get_remote_address)
 
 
 class CampaignCreate(BaseModel):
@@ -79,7 +82,9 @@ async def create_campaign(
 
 
 @router.post("/launch/{campaign_id}")
+@limiter.limit("2/minute")
 async def launch_campaign(
+    request: Request,
     campaign_id: str,
     user_id: str = Depends(get_current_user),
 ):
@@ -88,7 +93,7 @@ async def launch_campaign(
         raise HTTPException(status_code=404, detail="Campaign not found")
     verify_company_ownership(result.data["company_id"], user_id)
 
-    success = start_campaign(campaign_id, result.data["company_id"])
+    success = await start_campaign(campaign_id, result.data["company_id"])
     if not success:
         raise HTTPException(status_code=400, detail="Campaign is already running")
 

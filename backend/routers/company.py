@@ -1,11 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from services.supabase_client import supabase, verify_company_ownership
 from services.auth_middleware import get_current_user
 
 router = APIRouter()
+limiter = Limiter(key_func=get_remote_address)
+
+
+class CompanyCreate(BaseModel):
+    name: str
+    industry: str = ""
 
 
 class CompanyUpdate(BaseModel):
@@ -30,15 +38,16 @@ async def get_company(user_id: str = Depends(get_current_user)):
 
 
 @router.post("/create")
+@limiter.limit("5/hour")
 async def create_company(
-    name: str,
-    industry: str = "",
+    request: Request,
+    data: CompanyCreate,
     user_id: str = Depends(get_current_user),
 ):
     result = supabase.table("companies").insert({
         "user_id": user_id,
-        "name": name,
-        "industry": industry,
+        "name": data.name,
+        "industry": data.industry,
     }).execute()
     if not result.data:
         raise HTTPException(status_code=500, detail="Failed to create company")

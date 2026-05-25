@@ -1,17 +1,21 @@
 import os
 import uuid
 import logging
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
 from pydantic import BaseModel
 from typing import Optional
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from services.supabase_client import supabase, verify_company_ownership
 from services.auth_middleware import get_current_user
 from services.gemini_service import generate_embedding
+from services.storage_service import upload_file, delete_file
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+limiter = Limiter(key_func=get_remote_address)
 
 
 @router.get("/list/{company_id}")
@@ -31,7 +35,9 @@ async def list_documents(
 
 
 @router.post("/upload/{company_id}")
+@limiter.limit("5/minute")
 async def upload_document(
+    request: Request,
     company_id: str,
     file: UploadFile = File(...),
     user_id: str = Depends(get_current_user),
@@ -43,14 +49,14 @@ async def upload_document(
     file_size = len(content)
     file_ext = os.path.splitext(file.filename or "document.pdf")[1].lower()
 
-    # Save to local storage (for now)
-    upload_dir = f"uploads/{company_id}"
-    os.makedirs(upload_dir, exist_ok=True)
     file_id = str(uuid.uuid4())
-    storage_path = f"{upload_dir}/{file_id}{file_ext}"
-
-    with open(storage_path, "wb") as f:
-        f.write(content)
+    storage_path = f"{company_id}/{file_id}{file_ext}"
+    storage_url = upload_file(
+        "documents",
+        storage_path,
+        content,
+        file.content_type or "application/pdf",
+    )
 
     # Insert document record
     doc_result = supabase.table("documents").insert({
@@ -61,6 +67,7 @@ async def upload_document(
         "mime_type": file.content_type or "application/pdf",
         "status": "processing",
         "storage_path": storage_path,
+        "storage_url": storage_url,
     }).execute()
 
     if not doc_result.data:
@@ -144,8 +151,8 @@ async def delete_document(
 
     # Delete storage file
     storage_path = existing.data.get("storage_path")
-    if storage_path and os.path.exists(storage_path):
-        os.remove(storage_path)
+    if storage_path:
+        delete_file("documents", storage_path)
 
     # Delete chunks and document
     supabase.table("document_chunks").delete().eq("document_id", document_id).execute()

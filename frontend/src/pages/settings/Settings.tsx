@@ -7,7 +7,6 @@ import Select from '../../components/ui/Select'
 import Card, { CardHeader, CardTitle } from '../../components/ui/Card'
 import Tabs from '../../components/ui/Tabs'
 import Badge from '../../components/ui/Badge'
-import PageWrapper from '../../components/layout/PageWrapper'
 import useCompanyStore from '../../stores/companyStore'
 import { companyApi } from '../../lib/api'
 
@@ -74,7 +73,7 @@ export function Settings() {
   }
 
   return (
-    <PageWrapper>
+    <>
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-lg font-semibold text-text-primary">Settings</h2>
@@ -305,7 +304,7 @@ export function Settings() {
           )}
         </div>
       </motion.div>
-    </PageWrapper>
+    </>
   )
 }
 

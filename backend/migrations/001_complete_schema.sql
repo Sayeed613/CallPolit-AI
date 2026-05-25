@@ -6,6 +6,12 @@
 -- ============================================================
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS schema_version (
+    version TEXT PRIMARY KEY,
+    applied_at TIMESTAMPTZ DEFAULT NOW()
+);
 
 -- ============================================================
 -- COMPANIES TABLE
@@ -25,6 +31,7 @@ CREATE TABLE IF NOT EXISTS companies (
     twilio_phone_number TEXT DEFAULT '',
     twilio_account_sid TEXT DEFAULT '',
     twilio_auth_token TEXT DEFAULT '',
+    api_key TEXT DEFAULT '',
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -84,6 +91,7 @@ CREATE TABLE IF NOT EXISTS call_logs (
     contact_name TEXT DEFAULT '',
     contact_phone TEXT NOT NULL,
     caller_phone TEXT DEFAULT '',
+    twilio_call_sid TEXT DEFAULT '',
     status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'queued', 'ringing', 'in-progress', 'completed', 'no-answer', 'busy', 'failed', 'missed')),
     duration REAL DEFAULT 0,
     direction TEXT DEFAULT 'outbound' CHECK (direction IN ('outbound', 'inbound')),
@@ -114,6 +122,7 @@ CREATE TABLE IF NOT EXISTS documents (
     status TEXT DEFAULT 'processing' CHECK (status IN ('processing', 'ready', 'failed')),
     chunk_count INTEGER DEFAULT 0,
     storage_path TEXT DEFAULT '',
+    storage_url TEXT DEFAULT '',
     error_message TEXT DEFAULT '',
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -165,6 +174,7 @@ CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status);
 CREATE INDEX IF NOT EXISTS idx_call_logs_company_id ON call_logs(company_id);
 CREATE INDEX IF NOT EXISTS idx_call_logs_campaign_id ON call_logs(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_call_logs_contact_id ON call_logs(contact_id);
+CREATE INDEX IF NOT EXISTS idx_call_logs_twilio_sid ON call_logs(twilio_call_sid);
 CREATE INDEX IF NOT EXISTS idx_call_logs_status ON call_logs(status);
 CREATE INDEX IF NOT EXISTS idx_call_logs_created_at ON call_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_documents_company_id ON documents(company_id);
@@ -189,6 +199,32 @@ BEGIN
     USING p_amount, p_campaign_id;
 END;
 $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION match_document_chunks(
+    p_company_id UUID,
+    p_query_embedding vector(768),
+    p_match_threshold FLOAT DEFAULT 0.3,
+    p_match_count INT DEFAULT 5
+) RETURNS TABLE(
+    id UUID,
+    document_id UUID,
+    company_id UUID,
+    chunk_index INT,
+    content TEXT,
+    similarity FLOAT
+) LANGUAGE plpgsql AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        dc.id, dc.document_id, dc.company_id, dc.chunk_index, dc.content,
+        1 - (dc.embedding <=> p_query_embedding) AS similarity
+    FROM document_chunks dc
+    WHERE dc.company_id = p_company_id
+      AND 1 - (dc.embedding <=> p_query_embedding) > p_match_threshold
+    ORDER BY dc.embedding <=> p_query_embedding
+    LIMIT p_match_count;
+END;
+$$;
 
 -- Check and auto-complete campaign
 CREATE OR REPLACE FUNCTION check_campaign_completion(
@@ -287,3 +323,48 @@ USING (company_id IN (SELECT id FROM companies WHERE user_id = auth.uid()::text)
 DROP POLICY IF EXISTS "user_select_appointments" ON appointments;
 CREATE POLICY "user_select_appointments" ON appointments FOR SELECT TO authenticated
 USING (company_id IN (SELECT id FROM companies WHERE user_id = auth.uid()::text));
+
+DROP POLICY IF EXISTS "user_insert_companies" ON companies;
+CREATE POLICY "user_insert_companies" ON companies FOR INSERT TO authenticated
+WITH CHECK (user_id = auth.uid()::text);
+
+DROP POLICY IF EXISTS "user_update_companies" ON companies;
+CREATE POLICY "user_update_companies" ON companies FOR UPDATE TO authenticated
+USING (user_id = auth.uid()::text)
+WITH CHECK (user_id = auth.uid()::text);
+
+DROP POLICY IF EXISTS "user_delete_companies" ON companies;
+CREATE POLICY "user_delete_companies" ON companies FOR DELETE TO authenticated
+USING (user_id = auth.uid()::text);
+
+DROP POLICY IF EXISTS "user_all_contacts" ON contacts;
+CREATE POLICY "user_all_contacts" ON contacts FOR ALL TO authenticated
+USING (company_id IN (SELECT id FROM companies WHERE user_id = auth.uid()::text))
+WITH CHECK (company_id IN (SELECT id FROM companies WHERE user_id = auth.uid()::text));
+
+DROP POLICY IF EXISTS "user_all_campaigns" ON campaigns;
+CREATE POLICY "user_all_campaigns" ON campaigns FOR ALL TO authenticated
+USING (company_id IN (SELECT id FROM companies WHERE user_id = auth.uid()::text))
+WITH CHECK (company_id IN (SELECT id FROM companies WHERE user_id = auth.uid()::text));
+
+DROP POLICY IF EXISTS "user_all_call_logs" ON call_logs;
+CREATE POLICY "user_all_call_logs" ON call_logs FOR ALL TO authenticated
+USING (company_id IN (SELECT id FROM companies WHERE user_id = auth.uid()::text))
+WITH CHECK (company_id IN (SELECT id FROM companies WHERE user_id = auth.uid()::text));
+
+DROP POLICY IF EXISTS "user_all_documents" ON documents;
+CREATE POLICY "user_all_documents" ON documents FOR ALL TO authenticated
+USING (company_id IN (SELECT id FROM companies WHERE user_id = auth.uid()::text))
+WITH CHECK (company_id IN (SELECT id FROM companies WHERE user_id = auth.uid()::text));
+
+DROP POLICY IF EXISTS "user_all_document_chunks" ON document_chunks;
+CREATE POLICY "user_all_document_chunks" ON document_chunks FOR ALL TO authenticated
+USING (company_id IN (SELECT id FROM companies WHERE user_id = auth.uid()::text))
+WITH CHECK (company_id IN (SELECT id FROM companies WHERE user_id = auth.uid()::text));
+
+DROP POLICY IF EXISTS "user_all_appointments" ON appointments;
+CREATE POLICY "user_all_appointments" ON appointments FOR ALL TO authenticated
+USING (company_id IN (SELECT id FROM companies WHERE user_id = auth.uid()::text))
+WITH CHECK (company_id IN (SELECT id FROM companies WHERE user_id = auth.uid()::text));
+
+INSERT INTO schema_version(version) VALUES('001') ON CONFLICT (version) DO NOTHING;

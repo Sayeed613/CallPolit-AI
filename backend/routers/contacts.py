@@ -1,13 +1,16 @@
 import csv
 import io
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from pydantic import BaseModel
 from typing import Optional
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from services.supabase_client import supabase, verify_company_ownership
 from services.auth_middleware import get_current_user
 
 router = APIRouter()
+limiter = Limiter(key_func=get_remote_address)
 
 
 class ContactUpdate(BaseModel):
@@ -80,7 +83,9 @@ async def delete_contact(
 
 
 @router.post("/import/{company_id}")
+@limiter.limit("3/minute")
 async def import_contacts(
+    request: Request,
     company_id: str,
     file: UploadFile = File(...),
     user_id: str = Depends(get_current_user),

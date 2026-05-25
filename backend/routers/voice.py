@@ -10,19 +10,19 @@ from services.gemini_service import generate_response, generate_transcript_summa
 from services.rag_service import retrieve_relevant_chunks, build_context, detect_escalation, detect_sentiment
 from services.twilio_service import build_voice_twiml, build_gather_twiml, end_call_twiml
 from services.verification_service import generate_otp
+from services.redis_client import get_call_state, set_call_state, delete_call_state
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# In-memory call state (in production, use Redis)
-_call_state: dict[str, dict] = {}
 VERIFICATION_OTPS: dict[str, str] = {}
 
 
-def _get_or_create_state(call_sid: str, company_id: str = "", campaign_id: str = "", contact_id: str = "", contact_name: str = "") -> dict:
-    if call_sid not in _call_state:
-        _call_state[call_sid] = {
+async def _get_or_create_state(call_sid: str, company_id: str = "", campaign_id: str = "", contact_id: str = "", contact_name: str = "") -> dict:
+    state = await get_call_state(call_sid)
+    if not state:
+        state = {
             "company_id": company_id,
             "campaign_id": campaign_id,
             "contact_id": contact_id,
@@ -34,7 +34,8 @@ def _get_or_create_state(call_sid: str, company_id: str = "", campaign_id: str =
             "verification_step": 0,
             "conversation_ended": False,
         }
-    return _call_state[call_sid]
+        await set_call_state(call_sid, state)
+    return state
 
 
 @router.post("/outbound-call")
@@ -49,7 +50,7 @@ async def outbound_call_webhook(
     form_data = await request.form()
     call_sid = form_data.get("CallSid", "")
 
-    state = _get_or_create_state(call_sid, company_id, campaign_id, contact_id, contact_name)
+    state = await _get_or_create_state(call_sid, company_id, campaign_id, contact_id, contact_name)
 
     # Get company info
     company = supabase.table("companies").select("*").eq("id", company_id).single().execute()
@@ -97,6 +98,7 @@ async def outbound_call_webhook(
     }).eq("twilio_call_sid", call_sid).execute()
 
     state["transcript"].append({"role": "assistant", "content": greeting})
+    await set_call_state(call_sid, state)
 
     return PlainTextResponse(str(twiml), media_type="text/xml")
 
@@ -108,7 +110,7 @@ async def gather_webhook(request: Request):
     call_sid = form_data.get("CallSid", "")
     speech_result = form_data.get("SpeechResult", "")
 
-    state = _call_state.get(call_sid)
+    state = await get_call_state(call_sid)
     if not state:
         return PlainTextResponse(str(end_call_twiml()), media_type="text/xml")
 
@@ -127,6 +129,7 @@ async def gather_webhook(request: Request):
     if detect_escalation(speech_result):
         state["conversation_ended"] = True
         update_call_log(call_sid, state)
+        await set_call_state(call_sid, state)
         twiml = end_call_twiml(
             "I'm connecting you to a human agent. Please hold. Thank you.",
             state.get("contact_language", "en"),
@@ -159,6 +162,7 @@ async def gather_webhook(request: Request):
     if state["turn_count"] >= 20:
         state["conversation_ended"] = True
         update_call_log(call_sid, state)
+        await set_call_state(call_sid, state)
         twiml = end_call_twiml(
             "Thank you for your time. We will follow up if needed. Goodbye!",
             state.get("contact_language", "en"),
@@ -167,6 +171,7 @@ async def gather_webhook(request: Request):
 
     tts_language = state.get("contact_language", "en")
     twiml = build_gather_twiml(ai_response, tts_language)
+    await set_call_state(call_sid, state)
     return PlainTextResponse(str(twiml), media_type="text/xml")
 
 
@@ -195,7 +200,7 @@ async def call_status_webhook(request: Request):
 
     # Save transcript and generate summary if completed
     if call_status == "completed" and call_duration > 5:
-        state = _call_state.get(call_sid)
+        state = await get_call_state(call_sid)
         if state and state.get("transcript"):
             # Save transcript
             supabase.table("call_logs").update({
@@ -232,7 +237,7 @@ async def call_status_webhook(request: Request):
         check_campaign_completion(campaign_id)
 
     # Cleanup state
-    _call_state.pop(call_sid, None)
+    await delete_call_state(call_sid)
 
     return {"success": True}
 
@@ -274,12 +279,13 @@ async def incoming_call_webhook(request: Request):
         f"How can I help you today?"
     )
 
-    state = _get_or_create_state(call_sid, company_id)
+    state = await _get_or_create_state(call_sid, company_id)
     state["system_prompt"] = (
         f"You are a professional AI receptionist for {company_name}, a {industry} company. "
         f"Answer calls politely and help customers with their queries. "
         f"Keep responses concise and professional."
     )
+    await set_call_state(call_sid, state)
 
     twiml = build_voice_twiml(greeting, "en", company_name)
     return PlainTextResponse(str(twiml), media_type="text/xml")

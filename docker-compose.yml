@@ -1,11 +1,20 @@
 version: '3.8'
 
 services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+
   backend:
     build: ./backend
     ports:
       - "5050:5050"
     env_file: ./backend/.env
+    depends_on:
+      - redis
     restart: unless-stopped
 
   frontend:

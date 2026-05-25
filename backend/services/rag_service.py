@@ -1,8 +1,11 @@
 import json
+import logging
 from typing import Optional
 
 from services.supabase_client import supabase
 from services.gemini_service import generate_embedding
+
+logger = logging.getLogger(__name__)
 
 
 def retrieve_relevant_chunks(
@@ -30,7 +33,7 @@ def retrieve_relevant_chunks(
 
         return result.data if result.data else []
     except Exception as e:
-        print(f"RAG retrieval error: {e}")
+        logger.error(f"RAG retrieval error: {e}")
         return []
 
 

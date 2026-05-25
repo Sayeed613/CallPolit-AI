@@ -13,3 +13,5 @@ pypdf2==3.0.1
 sentence-transformers==2.2.2
 slowapi==0.1.9
 sentry-sdk[fastapi]==1.39.2
+redis==5.0.1
+fakeredis==2.20.0

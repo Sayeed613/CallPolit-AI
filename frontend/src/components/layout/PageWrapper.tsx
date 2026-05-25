@@ -21,12 +21,12 @@ export function PageWrapper({ children }: PageWrapperProps) {
 
   return (
     <ToastProvider>
-      <div className="min-h-screen bg-bg-base">
+      <div className="min-h-screen bg-canvas">
         <Sidebar />
 
         <div
           className={cn(
-            'transition-all duration-200 lg:ml-64',
+            'transition-all duration-200 lg:ml-[220px]',
             sidebarCollapsed && 'lg:ml-14',
           )}
         >
@@ -38,7 +38,7 @@ export function PageWrapper({ children }: PageWrapperProps) {
               initial="initial"
               animate="animate"
               exit="exit"
-              className="p-4 lg:p-6"
+              className="p-6"
             >
               {children}
             </motion.div>

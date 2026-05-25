@@ -1,4 +1,5 @@
 import os
+import warnings
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,9 +14,16 @@ class Settings:
     TWILIO_PHONE_NUMBER: str = os.getenv("TWILIO_PHONE_NUMBER", "")
     SARVAM_API_KEY: str = os.getenv("SARVAM_API_KEY", "")
     PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "http://localhost:5050")
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "*")
     SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
 
 
 settings = Settings()
+
+if settings.PUBLIC_BASE_URL.startswith("http://localhost"):
+    warnings.warn(
+        "PUBLIC_BASE_URL is set to localhost. Twilio webhooks will not work. Use ngrok or a real domain.",
+        RuntimeWarning,
+    )

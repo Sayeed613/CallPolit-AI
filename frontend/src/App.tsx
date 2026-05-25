@@ -2,8 +2,8 @@ import { useEffect, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
 import useAuthStore from './stores/authStore'
+import useCompanyStore from './stores/companyStore'
 import PageWrapper from './components/layout/PageWrapper'
-import LandingPage from './components/LandingPage'
 
 // Lazy load pages
 const Login = lazy(() => import('./pages/Login'))
@@ -26,10 +26,10 @@ const Settings = lazy(() => import('./pages/settings/Settings'))
 
 function LoadingFallback() {
   return (
-    <div className="flex items-center justify-center min-h-screen bg-bg-base">
+    <div className="flex min-h-screen items-center justify-center bg-canvas">
       <div className="flex flex-col items-center gap-4">
         <div className="w-8 h-8 border-2 border-brand-500/30 border-t-brand-500 rounded-full animate-spin" />
-        <p className="text-sm text-text-tertiary">Loading...</p>
+        <p className="text-sm text-ink-3">Loading...</p>
       </div>
     </div>
   )
@@ -59,13 +59,20 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
 
 function AppContent() {
   const location = useLocation()
-  const { initialize, initialized, loading } = useAuthStore()
+  const { initialize, initialized, loading, user } = useAuthStore()
+  const { fetchCompany } = useCompanyStore()
 
   useEffect(() => {
     if (!initialized) {
       initialize()
     }
   }, [initialize, initialized])
+
+  useEffect(() => {
+    if (user) {
+      fetchCompany()
+    }
+  }, [user, fetchCompany])
 
   if (!initialized || loading) {
     return <LoadingFallback />
@@ -76,7 +83,7 @@ function AppContent() {
       <Suspense fallback={<LoadingFallback />}>
         <Routes location={location} key={location.pathname}>
           {/* Public routes */}
-          <Route path="/" element={<PublicRoute><LandingPage /></PublicRoute>} />
+          <Route path="/" element={<Navigate to="/login" replace />} />
           <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
           <Route path="/signup" element={<PublicRoute><Signup /></PublicRoute>} />
           <Route path="/forgot-password" element={<ForgotPassword />} />

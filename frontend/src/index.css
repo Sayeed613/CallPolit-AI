@@ -4,12 +4,12 @@
 
 @layer base {
   * {
-    @apply border-border-default;
+    @apply border-border;
   }
 
   body {
-    @apply bg-bg-base text-text-primary;
-    font-family: 'Geist', system-ui, sans-serif;
+    @apply bg-canvas text-ink;
+    font-family: 'Inter', system-ui, sans-serif;
     font-size: 14px;
     line-height: 1.6;
     -webkit-font-smoothing: antialiased;
@@ -17,8 +17,8 @@
   }
 
   ::selection {
-    background-color: rgba(99, 102, 241, 0.3);
-    color: #f5f5f5;
+    background-color: rgba(99, 102, 241, 0.15);
+    color: #1a1917;
   }
 
   ::-webkit-scrollbar {
@@ -31,63 +31,23 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: #2a2a2a;
+    background: #d4d2cc;
     border-radius: 3px;
-  }
-
-  ::-webkit-scrollbar-thumb:hover {
-    background: #3a3a3a;
   }
 }
 
 @layer components {
-  .glass-card {
-    @apply bg-white/[0.03] backdrop-blur-xl border border-white/[0.08] rounded-xl;
-  }
-
-  .gradient-text {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-brand-400 to-brand-300;
-  }
-
-  .gradient-border {
-    position: relative;
-  }
-
-  .gradient-border::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    padding: 1px;
-    background: linear-gradient(135deg, rgba(99, 102, 241, 0.5), rgba(168, 85, 247, 0.3));
-    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-    mask-composite: exclude;
-    -webkit-mask-composite: xor;
-  }
-
-  .shimmer {
-    background: linear-gradient(
-      90deg,
-      transparent 0%,
-      rgba(255, 255, 255, 0.03) 50%,
-      transparent 100%
-    );
-    background-size: 200% 100%;
-    animation: shimmer 2s infinite linear;
-  }
-
-  @keyframes shimmer {
-    0% { background-position: -200% 0; }
-    100% { background-position: 200% 0; }
+  .pulse-dot {
+    animation: pulse-dot 2s ease-in-out infinite;
   }
 
   @keyframes pulse-dot {
     0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
+    50% { opacity: 0.35; }
   }
 
-  .pulse-dot {
-    animation: pulse-dot 2s ease-in-out infinite;
+  .animate-slide-up {
+    animation: slide-up 0.25s ease-out forwards;
   }
 
   @keyframes slide-up {
@@ -99,34 +59,5 @@
       opacity: 1;
       transform: translateY(0);
     }
-  }
-
-  .animate-slide-up {
-    animation: slide-up 0.25s ease-out forwards;
-  }
-
-  @keyframes shake {
-    0%, 100% { transform: translateX(0); }
-    10%, 30%, 50%, 70%, 90% { transform: translateX(-4px); }
-    20%, 40%, 60%, 80% { transform: translateX(4px); }
-  }
-
-  .animate-shake {
-    animation: shake 0.5s ease-in-out;
-  }
-
-  @keyframes count-up {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  .animate-count-up {
-    animation: count-up 0.6s ease-out forwards;
-  }
-}
-
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
   }
 }

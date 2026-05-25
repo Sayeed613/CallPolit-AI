@@ -1,6 +1,6 @@
-import { forwardRef, useState, useId } from 'react'
-import { cn } from '../../lib/utils'
+import { forwardRef, useId, useState } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
+import { cn } from '../../lib/utils'
 
 interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label?: string
@@ -8,97 +8,53 @@ interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   helperText?: string
   icon?: React.ReactNode
   suffix?: React.ReactNode
+  inputSize?: 'sm' | 'md'
 }
 
 const Input = forwardRef<HTMLInputElement, InputProps>(
-  ({ className, label, error, helperText, icon, suffix, type, value, onChange, placeholder, ...props }, ref) => {
+  ({ className, label, error, helperText, icon, suffix, type, inputSize = 'md', ...props }, ref) => {
     const [showPassword, setShowPassword] = useState(false)
-    const [focused, setFocused] = useState(false)
     const autoId = useId()
-    const inputId = props.id || (label ? `input-${label.toLowerCase().replace(/\s+/g, '-')}-${autoId}` : `input-${autoId}`)
-
+    const inputId = props.id || `input-${autoId}`
     const isPassword = type === 'password'
-    const inputType = isPassword ? (showPassword ? 'text' : 'password') : type
-    const hasValue = value !== undefined && value !== '' && value !== null
-    const isFloating = focused || hasValue
 
     return (
       <div className="w-full">
-        <div
-          className={cn(
-            'relative flex items-center rounded-lg border transition-all duration-150',
-            error
-              ? 'border-error bg-error/5'
-              : focused
-                ? 'border-brand-500/50 bg-bg-surface'
-                : 'border-border-default bg-bg-surface hover:border-border-strong',
-            className,
-          )}
-        >
-          {icon && (
-            <span className="pl-3 text-text-tertiary flex-shrink-0">{icon}</span>
-          )}
-
-          <div className="relative flex-1">
-            {label && (
-              <label
-                htmlFor={inputId}
-                className={cn(
-                  'absolute left-3 transition-all duration-150 pointer-events-none',
-                  isFloating
-                    ? '-top-2.5 text-xs text-brand-400 bg-bg-surface px-1'
-                    : 'top-1/2 -translate-y-1/2 text-sm text-text-tertiary',
-                )}
-              >
-                {label}
-              </label>
+        {label && (
+          <label htmlFor={inputId} className="mb-1 block text-xs font-medium text-ink-2">
+            {label}
+          </label>
+        )}
+        <div className="relative">
+          {icon && <span className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-3">{icon}</span>}
+          <input
+            ref={ref}
+            id={inputId}
+            type={isPassword ? (showPassword ? 'text' : 'password') : type}
+            className={cn(
+              'w-full rounded-md border bg-white px-3 text-sm text-ink outline-none transition duration-100 placeholder:text-ink-3',
+              inputSize === 'sm' ? 'h-[34px]' : 'h-[38px]',
+              icon && 'pl-9',
+              (suffix || isPassword) && 'pr-10',
+              error ? 'border-danger' : 'border-border focus:border-brand-500 focus:shadow-focus',
+              className,
             )}
-            <input
-              ref={ref}
-              id={inputId}
-              type={inputType}
-              value={value}
-              onChange={onChange}
-              placeholder={isFloating ? placeholder : (label ? '' : placeholder)}
-              autoComplete={props.autoComplete || (type === 'password' ? 'current-password' : type === 'email' ? 'email' : type === 'tel' ? 'tel' : 'off')}
-              onFocus={(e) => {
-                setFocused(true)
-                props.onFocus?.(e)
-              }}
-              onBlur={(e) => {
-                setFocused(false)
-                props.onBlur?.(e)
-              }}
-              className={cn(
-                'w-full bg-transparent text-text-primary placeholder-text-disabled outline-none',
-                'px-3 py-2.5 text-sm',
-                label && (isFloating ? 'pt-3.5 pb-1.5' : 'py-2.5'),
-                icon && 'pl-0',
-                isPassword && 'pr-10',
-                'disabled:opacity-40 disabled:cursor-not-allowed',
-              )}
-              {...props}
-            />
-          </div>
-
+            {...props}
+          />
           {isPassword && (
             <button
               type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              className="pr-3 text-text-tertiary hover:text-text-secondary transition-colors"
+              onClick={() => setShowPassword((value) => !value)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-3 hover:text-ink-2"
               tabIndex={-1}
             >
               {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
             </button>
           )}
-
-          {suffix && !isPassword && (
-            <span className="pr-3 text-text-tertiary flex-shrink-0">{suffix}</span>
-          )}
+          {suffix && !isPassword && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-3">{suffix}</span>}
         </div>
-
-        {error && <p className="mt-1.5 text-xs text-error">{error}</p>}
-        {helperText && !error && <p className="mt-1.5 text-xs text-text-tertiary">{helperText}</p>}
+        {error && <p className="mt-1 text-xs text-danger">{error}</p>}
+        {helperText && !error && <p className="mt-1 text-xs text-ink-3">{helperText}</p>}
       </div>
     )
   },

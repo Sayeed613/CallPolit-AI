@@ -7,35 +7,6 @@ from services.auth_middleware import get_current_user
 router = APIRouter()
 
 
-def _get_campaign_ids(supabase, company_id: str) -> list[str]:
-    """Get all campaign IDs for a company."""
-    result = (
-        supabase.table("campaigns")
-        .select("id")
-        .eq("company_id", company_id)
-        .execute()
-    )
-    return [c["id"] for c in (result.data or [])]
-
-
-def _query_call_logs_by_campaigns(supabase, campaign_ids: list[str], gte_date: str | None = None, status_eq: str | None = None):
-    """Query call_logs filtered by campaign IDs (since call_logs has no company_id column)."""
-    if not campaign_ids:
-        return {"data": [], "count": 0}
-
-    query = supabase.table("call_logs").select("id", count="exact")
-    query = query.in_("campaign_id", campaign_ids)
-
-    if gte_date:
-        query = query.gte("created_at", gte_date)
-    if status_eq:
-        query = query.eq("status", status_eq)
-
-    result = query.execute()
-    count = result.count if hasattr(result, "count") else len(result.data or [])
-    return {"data": result.data, "count": count}
-
-
 @router.get("/stats/{company_id}")
 async def get_analytics_stats(
     company_id: str,
@@ -48,40 +19,35 @@ async def get_analytics_stats(
     today = datetime.utcnow().date()
     lookback = today - timedelta(days=days)
 
-    campaign_ids = _get_campaign_ids(supabase, company_id)
-
-    # Total & connected calls via campaign_ids (call_logs has no company_id)
     total_calls = 0
     connected = 0
     total_today = 0
     connected_today = 0
     durations = []
 
-    if campaign_ids:
-        all_calls = (
-            supabase.table("call_logs")
-            .select("id, status, duration_seconds, created_at", count="exact")
-            .in_("campaign_id", campaign_ids)
-            .gte("created_at", lookback.isoformat())
-            .execute()
-        )
-        all_count = all_calls.count if hasattr(all_calls, "count") else len(all_calls.data or [])
-        total_calls = all_count
+    all_calls = (
+        supabase.table("call_logs")
+        .select("id, status, duration, created_at", count="exact")
+        .eq("company_id", company_id)
+        .gte("created_at", lookback.isoformat())
+        .execute()
+    )
+    total_calls = all_calls.count if hasattr(all_calls, "count") else len(all_calls.data or [])
 
-        for row in all_calls.data or []:
-            created = row.get("created_at", "")
+    for row in all_calls.data or []:
+        created = row.get("created_at", "")
+        if created >= today.isoformat():
+            total_today += 1
+
+        status = row.get("status", "")
+        if status == "completed":
+            connected += 1
             if created >= today.isoformat():
-                total_today += 1
+                connected_today += 1
 
-            status = row.get("status", "")
-            if status == "completed":
-                connected += 1
-                if created >= today.isoformat():
-                    connected_today += 1
-
-            dur = row.get("duration_seconds")
-            if dur:
-                durations.append(dur)
+        dur = row.get("duration")
+        if dur:
+            durations.append(dur)
 
     avg_duration = round(sum(durations) / len(durations), 1) if durations else 0
     minutes = int(avg_duration // 60)
@@ -117,6 +83,14 @@ async def get_analytics_stats(
     )
     completed_campaigns = completed_campaigns_result.count if hasattr(completed_campaigns_result, "count") else 0
 
+    leads_result = (
+        supabase.table("campaigns")
+        .select("hot_leads")
+        .eq("company_id", company_id)
+        .execute()
+    )
+    total_hot_leads = sum(c.get("hot_leads", 0) or 0 for c in leads_result.data or [])
+
     # Appointments
     appointments_result = (
         supabase.table("appointments")
@@ -142,6 +116,8 @@ async def get_analytics_stats(
         "completed_campaigns": completed_campaigns,
         "total_contacts": total_contacts,
         "appointments": appointments,
+        "total_hot_leads": total_hot_leads,
+        "hot_leads": total_hot_leads,
     }
 
 
@@ -199,38 +175,34 @@ async def get_recent_activity(
                 "icon": "users",
             })
 
-    # Recent call logs (via campaign_ids, since call_logs has no company_id)
-    campaign_ids = _get_campaign_ids(supabase, company_id)
-    if campaign_ids:
-        calls = (
-            supabase.table("call_logs")
-            .select("id, status, created_at, contact_id, campaign_id")
-            .in_("campaign_id", campaign_ids)
-            .order("created_at", desc=True)
-            .limit(5)
-            .execute()
-        )
-        for call in calls.data or []:
-            # Look up contact name if contact_id is available
-            name = "Unknown"
-            if call.get("contact_id"):
-                contact_row = (
-                    supabase.table("contacts")
-                    .select("name, phone")
-                    .eq("id", call["contact_id"])
-                    .limit(1)
-                    .execute()
-                )
-                if contact_row.data:
-                    name = contact_row.data[0].get("name") or contact_row.data[0].get("phone", "Unknown")
+    calls = (
+        supabase.table("call_logs")
+        .select("id, status, created_at, contact_id, campaign_id")
+        .eq("company_id", company_id)
+        .order("created_at", desc=True)
+        .limit(5)
+        .execute()
+    )
+    for call in calls.data or []:
+        name = "Unknown"
+        if call.get("contact_id"):
+            contact_row = (
+                supabase.table("contacts")
+                .select("name, phone")
+                .eq("id", call["contact_id"])
+                .limit(1)
+                .execute()
+            )
+            if contact_row.data:
+                name = contact_row.data[0].get("name") or contact_row.data[0].get("phone", "Unknown")
 
-            status_text = call.get("status", "completed")
-            activities.append({
-                "type": "call",
-                "text": f'Call to {name} {status_text}',
-                "time": call["created_at"],
-                "icon": "phone",
-            })
+        status_text = call.get("status", "completed")
+        activities.append({
+            "type": "call",
+            "text": f'Call to {name} {status_text}',
+            "time": call["created_at"],
+            "icon": "phone",
+        })
 
     # Sort by time descending and take top 10
     activities.sort(key=lambda x: x["time"], reverse=True)

@@ -14,7 +14,6 @@ import useCallStore from '../stores/callStore'
 import useAuthStore from '../stores/authStore'
 import { liveApi, analyticsApi, campaignsApi } from '../lib/api'
 import { formatDuration, maskPhone, getTimeAgo, formatNumber } from '../lib/utils'
-import WaveBackground from '../components/three/WaveBackground'
 
 interface DashboardStats {
   total_calls_today: number
@@ -151,13 +150,11 @@ export function Dashboard() {
 
   return (
     <div className="relative">
-      <WaveBackground />
-
       <motion.div
         variants={containerVariants}
         initial="hidden"
         animate="visible"
-        className="relative z-10 space-y-6"
+        className="relative space-y-6"
       >
         {/* Greeting */}
         <motion.div variants={cardVariants}>

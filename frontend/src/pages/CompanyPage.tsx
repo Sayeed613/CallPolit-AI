@@ -4,7 +4,6 @@ import { motion } from 'framer-motion'
 import Button from '../components/ui/Button'
 import Card, { CardHeader, CardTitle } from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
-import PageWrapper from '../components/layout/PageWrapper'
 import { companyApi } from '../lib/api'
 
 export function CompanyPage() {
@@ -32,17 +31,15 @@ export function CompanyPage() {
 
   if (loading) {
     return (
-      <PageWrapper>
-        <div className="animate-pulse space-y-4">
-          <div className="h-8 w-48 rounded bg-zinc-800" />
-          <div className="h-64 rounded-xl bg-zinc-800" />
-        </div>
-      </PageWrapper>
+      <div className="animate-pulse space-y-4">
+        <div className="h-8 w-48 rounded bg-border" />
+        <div className="h-64 rounded-xl bg-border" />
+      </div>
     )
   }
 
   return (
-    <PageWrapper>
+    <div>
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-lg font-semibold text-text-primary">{company?.name || 'Company'}</h2>
@@ -104,7 +101,7 @@ export function CompanyPage() {
           </div>
         </Card>
       </div>
-    </PageWrapper>
+    </div>
   )
 }
 

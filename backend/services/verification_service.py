@@ -1,23 +1,12 @@
 import random
 import re
 from typing import Optional
+from utils.phone import normalize_phone
 
 
 def generate_otp(length: int = 4) -> str:
     """Generate a numeric OTP."""
     return str(random.randint(10 ** (length - 1), (10**length) - 1))
-
-
-def normalize_phone(phone: str) -> str:
-    """Normalize a phone number to international format."""
-    phone = re.sub(r"[^\d+]", "", phone)
-    if phone.startswith("+"):
-        return phone
-    if phone.startswith("91") and len(phone) == 12:
-        return f"+{phone}"
-    if len(phone) == 10:
-        return f"+91{phone}"
-    return phone
 
 
 def verify_name(provided_name: str, stored_name: str) -> bool:

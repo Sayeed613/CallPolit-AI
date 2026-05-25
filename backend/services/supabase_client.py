@@ -1,8 +1,11 @@
+import logging
 from datetime import datetime, timezone
 
 from supabase import create_client, Client
 from fastapi import HTTPException
 from config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 supabase: Client = create_client(
     settings.SUPABASE_URL,
@@ -25,7 +28,7 @@ def increment_campaign_counter(campaign_id: str, field: str, amount: int = 1) ->
             .execute()
         )
         if not result.data:
-            print(f"Campaign {campaign_id} not found for counter increment")
+            logger.warning(f"Campaign {campaign_id} not found for counter increment")
             return False
 
         current = result.data.get(field, 0) or 0
@@ -39,7 +42,7 @@ def increment_campaign_counter(campaign_id: str, field: str, amount: int = 1) ->
 
         return True
     except Exception as e:
-        print(f"Error incrementing campaign counter: {e}")
+        logger.error(f"Error incrementing campaign counter: {e}")
         return False
 
 
@@ -90,7 +93,7 @@ def check_campaign_completion(campaign_id: str) -> bool:
 
         return False
     except Exception as e:
-        print(f"Error checking campaign completion: {e}")
+        logger.error(f"Error checking campaign completion: {e}")
         return False
 
 

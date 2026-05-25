@@ -56,12 +56,12 @@ async def run_campaign(campaign_id: str, company_id: str):
                 # Initiate call via voice service
                 company = (
                     supabase.table("companies")
-                    .select("twilio_phone")
+                    .select("twilio_phone_number")
                     .eq("id", company_id)
                     .single()
                     .execute()
                 )
-                twilio_phone = company.data.get("twilio_phone", "") if company.data else ""
+                twilio_phone = company.data.get("twilio_phone_number", "") if company.data else ""
 
                 # Check if Twilio is actually configured before calling
                 if not twilio_phone and not settings.TWILIO_PHONE_NUMBER:
@@ -109,7 +109,7 @@ async def run_campaign(campaign_id: str, company_id: str):
         _paused_campaigns.discard(campaign_id)
 
 
-def start_campaign(campaign_id: str, company_id: str) -> bool:
+async def start_campaign(campaign_id: str, company_id: str) -> bool:
     """Start a campaign asynchronously."""
     if campaign_id in _active_tasks:
         logger.warning(f"Campaign {campaign_id} already running")
