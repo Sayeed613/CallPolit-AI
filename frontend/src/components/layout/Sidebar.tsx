@@ -10,6 +10,7 @@ import {
   Phone,
   Radio,
   Settings2,
+  Sparkles,
   Users,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
@@ -22,7 +23,7 @@ const navItems = [
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/live', label: 'Live Calls', icon: Radio, live: true },
   { path: '/campaigns', label: 'Campaigns', icon: Megaphone },
-  { path: '/contacts', label: 'Contacts', icon: Users },
+  { path: '/customers', label: 'Customers', icon: Users },
   { path: '/analytics', label: 'Analytics', icon: BarChart2 },
   { path: '/documents', label: 'Documents', icon: FileText },
   { path: '/appointments', label: 'Appointments', icon: Calendar },

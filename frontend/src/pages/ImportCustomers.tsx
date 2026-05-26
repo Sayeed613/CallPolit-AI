@@ -5,11 +5,11 @@ import Card, { CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Progress from '../components/ui/Progress'
 import { useToast } from '../components/ui/Toast'
-import { contactsApi } from '../lib/api'
+import { customersApi } from '../lib/api'
 import useCompanyStore from '../stores/companyStore'
 import { cn } from '../lib/utils'
 
-export function ImportContacts() {
+export function ImportCustomers() {
   const navigate = useNavigate()
   const { company } = useCompanyStore()
   const { addToast } = useToast()
@@ -44,10 +44,10 @@ export function ImportContacts() {
     setProgress(30)
 
     try {
-      const data = await contactsApi.import(company.id, file)
+      const data = await customersApi.import(company.id, file)
       setProgress(100)
       setResult(data)
-      addToast({ type: 'success', message: `${data.imported} contacts imported` })
+      addToast({ type: 'success', message: `${data.imported} customers imported` })
     } catch (err: any) {
       setError(err.message || 'Import failed')
       addToast({ type: 'error', message: err.message || 'Import failed' })
@@ -57,14 +57,14 @@ export function ImportContacts() {
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
-      <button onClick={() => navigate('/contacts')} className="flex items-center gap-2 text-sm text-text-secondary hover:text-text-primary transition-colors">
+      <button onClick={() => navigate('/customers')} className="flex items-center gap-2 text-sm text-text-secondary hover:text-text-primary transition-colors">
         <ArrowLeft size={16} />
-        Back to contacts
+        Back to customers
       </button>
 
       <div>
-        <h1 className="text-xl font-bold text-text-primary">Import Contacts</h1>
-        <p className="text-sm text-text-tertiary mt-1">Upload a CSV or Excel file with your contacts</p>
+        <h1 className="text-xl font-bold text-text-primary">Import Customers</h1>
+        <p className="text-sm text-text-tertiary mt-1">Upload a CSV or Excel file with your customers</p>
       </div>
 
       {/* Step 1: File upload */}
@@ -130,7 +130,7 @@ export function ImportContacts() {
             </Button>
             <Button className="flex-1" onClick={handleImport}>
               <Upload size={16} />
-              Import Contacts
+              Import Customers
             </Button>
           </div>
         </Card>
@@ -140,7 +140,7 @@ export function ImportContacts() {
       {importing && (
         <Card>
           <CardHeader>
-            <CardTitle>Importing Contacts...</CardTitle>
+            <CardTitle>Importing Customers...</CardTitle>
           </CardHeader>
           <Progress value={progress} showLabel size="lg" />
           <p className="text-xs text-text-tertiary mt-2">Processing your file...</p>
@@ -156,14 +156,14 @@ export function ImportContacts() {
             </div>
             <h3 className="text-lg font-semibold text-text-primary mb-1">Import Complete!</h3>
             <p className="text-sm text-text-secondary mb-6">
-              Successfully imported {result.imported} contacts
+              Successfully imported {result.imported} customers
             </p>
             <div className="flex gap-3">
               <Button variant="secondary" onClick={() => { setFile(null); setResult(null) }}>
                 Import Another
               </Button>
-              <Button onClick={() => navigate('/contacts')}>
-                View Contacts
+              <Button onClick={() => navigate('/customers')}>
+                View Customers
               </Button>
             </div>
           </div>
@@ -189,4 +189,4 @@ export function ImportContacts() {
   )
 }
 
-export default ImportContacts
+export default ImportCustomers

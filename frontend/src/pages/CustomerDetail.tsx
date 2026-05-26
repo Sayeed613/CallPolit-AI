@@ -6,15 +6,15 @@ import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import { SkeletonCard } from '../components/ui/Skeleton'
-import { contactsApi } from '../lib/api'
+import { customersApi } from '../lib/api'
 import { formatDateTime, maskPhone, maskEmail, formatDuration } from '../lib/utils'
 import { useToast } from '../components/ui/Toast'
 
-export function ContactDetail() {
+export function CustomerDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { addToast } = useToast()
-  const [contact, setContact] = useState<any>(null)
+  const [customer, setCustomer] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState(false)
   const [editForm, setEditForm] = useState({ name: '', email: '', notes: '' })
@@ -23,8 +23,8 @@ export function ContactDetail() {
     if (!id) return
     const load = async () => {
       try {
-        const data = await contactsApi.get(id)
-        setContact(data)
+        const data = await customersApi.get(id)
+        setCustomer(data)
         setEditForm({ name: data.name || '', email: data.email || '', notes: data.notes || '' })
       } catch {
         // fallback
@@ -37,10 +37,10 @@ export function ContactDetail() {
   const handleSave = async () => {
     if (!id) return
     try {
-      await contactsApi.update(id, editForm)
-      setContact((prev: any) => ({ ...prev, ...editForm }))
+      await customersApi.update(id, editForm)
+      setCustomer((prev: any) => ({ ...prev, ...editForm }))
       setEditing(false)
-      addToast({ type: 'success', message: 'Contact updated' })
+      addToast({ type: 'success', message: 'Customer updated' })
     } catch (err: any) {
       addToast({ type: 'error', message: err.message })
     }
@@ -55,12 +55,12 @@ export function ContactDetail() {
     )
   }
 
-  if (!contact) {
+  if (!customer) {
     return (
       <div className="text-center py-16">
-        <p className="text-text-secondary">Contact not found</p>
-        <Button variant="secondary" className="mt-4" onClick={() => navigate('/contacts')}>
-          Back to contacts
+        <p className="text-text-secondary">Customer not found</p>
+        <Button variant="secondary" className="mt-4" onClick={() => navigate('/customers')}>
+          Back to customers
         </Button>
       </div>
     )
@@ -68,9 +68,9 @@ export function ContactDetail() {
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
-      <button onClick={() => navigate('/contacts')} className="flex items-center gap-2 text-sm text-text-secondary hover:text-text-primary transition-colors">
+      <button onClick={() => navigate('/customers')} className="flex items-center gap-2 text-sm text-text-secondary hover:text-text-primary transition-colors">
         <ArrowLeft size={16} />
-        Back to contacts
+        Back to customers
       </button>
 
       {/* Profile card */}
@@ -78,7 +78,7 @@ export function ContactDetail() {
         <CardHeader>
           <div className="flex items-center gap-4">
             <div className="w-14 h-14 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center">
-              <span className="text-lg font-bold text-white">{contact.name?.[0] || '?'}</span>
+              <span className="text-lg font-bold text-white">{customer.name?.[0] || '?'}</span>
             </div>
             <div>
               {editing ? (
@@ -88,13 +88,13 @@ export function ContactDetail() {
                   className="mb-1"
                 />
               ) : (
-                <h1 className="text-lg font-bold text-text-primary">{contact.name || 'Unknown'}</h1>
+                <h1 className="text-lg font-bold text-text-primary">{customer.name || 'Unknown'}</h1>
               )}
               <div className="flex items-center gap-2 mt-1">
-                <Badge variant={contact.status === 'active' ? 'success' : 'default'} size="sm">{contact.status}</Badge>
-                {contact.is_vip && <Badge variant="warning" size="sm">VIP</Badge>}
-                <Badge variant={contact.verified ? 'success' : 'default'} size="sm" dot={contact.verified}>
-                  {contact.verified ? `Verified L${contact.verification_level}` : 'Unverified'}
+                <Badge variant={customer.status === 'active' ? 'success' : 'default'} size="sm">{customer.status}</Badge>
+                {customer.is_vip && <Badge variant="warning" size="sm">VIP</Badge>}
+                <Badge variant={customer.verified ? 'success' : 'default'} size="sm" dot={customer.verified}>
+                  {customer.verified ? `Verified L${customer.verification_level}` : 'Unverified'}
                 </Badge>
               </div>
             </div>
@@ -109,7 +109,7 @@ export function ContactDetail() {
             <Phone size={16} className="text-text-tertiary" />
             <div>
               <p className="text-xs text-text-tertiary">Phone</p>
-              <p className="text-sm text-text-primary font-mono">{maskPhone(contact.phone)}</p>
+              <p className="text-sm text-text-primary font-mono">{maskPhone(customer.phone)}</p>
             </div>
           </div>
           <div className="flex items-center gap-3 p-3 rounded-lg bg-bg-surface">
@@ -122,7 +122,7 @@ export function ContactDetail() {
                   onChange={(e) => setEditForm((p) => ({ ...p, email: e.target.value }))}
                 />
               ) : (
-                <p className="text-sm text-text-primary">{contact.email || '-'}</p>
+                <p className="text-sm text-text-primary">{customer.email || '-'}</p>
               )}
             </div>
           </div>
@@ -130,14 +130,14 @@ export function ContactDetail() {
             <Calendar size={16} className="text-text-tertiary" />
             <div>
               <p className="text-xs text-text-tertiary">Last Called</p>
-              <p className="text-sm text-text-primary">{contact.last_called ? formatDateTime(contact.last_called) : 'Never'}</p>
+              <p className="text-sm text-text-primary">{customer.last_called ? formatDateTime(customer.last_called) : 'Never'}</p>
             </div>
           </div>
           <div className="flex items-center gap-3 p-3 rounded-lg bg-bg-surface">
             <Shield size={16} className="text-text-tertiary" />
             <div>
               <p className="text-xs text-text-tertiary">Verification Level</p>
-              <p className="text-sm text-text-primary">{contact.verification_level || 0}</p>
+              <p className="text-sm text-text-primary">{customer.verification_level || 0}</p>
             </div>
           </div>
         </div>
@@ -168,4 +168,4 @@ export function ContactDetail() {
   )
 }
 
-export default ContactDetail
+export default CustomerDetail

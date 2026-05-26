@@ -19,7 +19,7 @@ from sentry_sdk.integrations.fastapi import FastApiIntegration
 from routers import (
     health,
     company,
-    contacts,
+    customers,
     documents,
     campaign,
     voice,
@@ -104,7 +104,7 @@ async def root():
 # ─── Include Routers ─────────────────────────────────────────────
 app.include_router(health.router, prefix="/api", tags=["Health"])
 app.include_router(company.router, prefix="/api/company", tags=["Company"])
-app.include_router(contacts.router, prefix="/api/contacts", tags=["Contacts"])
+app.include_router(customers.router, prefix="/api/customers", tags=["Customers"])
 app.include_router(documents.router, prefix="/api/documents", tags=["Documents"])
 app.include_router(campaign.router, prefix="/api/campaign", tags=["Campaigns"])
 app.include_router(voice.router, prefix="/api/voice", tags=["Voice"])
@@ -112,3 +112,4 @@ app.include_router(verification.router, prefix="/api/verification", tags=["Verif
 app.include_router(appointments.router, prefix="/api/appointments", tags=["Appointments"])
 app.include_router(live.router, prefix="/api/live", tags=["Live"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
+

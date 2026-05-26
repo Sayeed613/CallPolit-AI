@@ -4,15 +4,16 @@ import { useNavigate } from 'react-router-dom'
 import {
   PhoneCall, Megaphone, Users, Calendar,
   TrendingUp, TrendingDown, Activity, Radio,
-  Target, ArrowRight, Play, Upload, FileText, BarChart2,
+  Target, Upload, FileText, BarChart2,
 } from 'lucide-react'
 import Card, { CardHeader, CardTitle } from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
+import Button from '../components/ui/Button'
 import { SkeletonCard } from '../components/ui/Skeleton'
 import useCompanyStore from '../stores/companyStore'
 import useCallStore from '../stores/callStore'
 import useAuthStore from '../stores/authStore'
-import { liveApi, analyticsApi, campaignsApi } from '../lib/api'
+import { analyticsApi, campaignsApi } from '../lib/api'
 import { formatDuration, maskPhone, getTimeAgo, formatNumber } from '../lib/utils'
 
 interface DashboardStats {
@@ -65,7 +66,8 @@ export function Dashboard() {
   const navigate = useNavigate()
   const { company } = useCompanyStore()
   const { user } = useAuthStore()
-  const { activeCalls, fetchActiveCalls, fetchStats, stats } = useCallStore()
+  const { activeCalls, fetchActiveCalls, fetchStats } = useCallStore()
+
   const [activityFeed, setActivityFeed] = useState<{ type: string; text: string; time: string; icon: string }[]>([])
   const [recentCampaigns, setRecentCampaigns] = useState<any[]>([])
   const [dashboardStats, setDashboardStats] = useState<DashboardStats>({
@@ -76,25 +78,17 @@ export function Dashboard() {
   })
   const [loading, setLoading] = useState(true)
 
+  // --- Initial load + polling ---
   useEffect(() => {
     const load = async () => {
       setLoading(true)
       try {
-        const [liveStats, activityData, campaignList] = await Promise.all([
-          liveApi.stats(),
+        const [activityData, campaignList] = await Promise.all([
           company?.id ? analyticsApi.activity(company.id) : Promise.resolve({ activities: [] }),
           company?.id ? campaignsApi.list(company.id) : Promise.resolve({ campaigns: [] }),
           fetchActiveCalls(),
           fetchStats(),
         ])
-        setDashboardStats({
-          total_calls_today: liveStats?.total_today || 0,
-          active_campaigns: liveStats?.active_campaigns || 0,
-          connection_rate: liveStats?.total_today
-            ? Math.round(((liveStats.connected_today || 0) / liveStats.total_today) * 100)
-            : 0,
-          appointments_today: 0,
-        })
         setActivityFeed(activityData?.activities || [])
         setRecentCampaigns((campaignList?.campaigns || []).slice(0, 3))
       } catch {
@@ -111,23 +105,41 @@ export function Dashboard() {
     return () => clearInterval(interval)
   }, [fetchActiveCalls, fetchStats, company?.id])
 
+  // --- Compute stats from active calls and store ---
+  useEffect(() => {
+    const totalCallsToday = activeCalls.length
+    const activeCampaigns = new Set(activeCalls.map(c => c.campaign_id).filter(Boolean)).size
+    const connected = activeCalls.filter(c => c.status === 'completed' || c.status === 'in-progress').length
+    const connectionRate = totalCallsToday > 0 ? Math.round((connected / totalCallsToday) * 100) : 0
+
+    setDashboardStats({
+      total_calls_today: totalCallsToday,
+      active_campaigns: activeCampaigns,
+      connection_rate: connectionRate,
+      appointments_today: 0,
+    })
+  }, [activeCalls])
+
   const firstName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'there'
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+
+  const liveCalls = activeCalls.filter(c => c.status === 'in-progress')
+  const ringingCalls = activeCalls.filter(c => c.status === 'ringing')
 
   const statCards = [
     {
       label: 'Total Calls Today',
       value: dashboardStats.total_calls_today,
       icon: PhoneCall,
-      trend: '+12%',
-      trendUp: true,
+      trend: null as string | null,
+      trendUp: false,
     },
     {
       label: 'Active Campaigns',
       value: dashboardStats.active_campaigns,
       icon: Megaphone,
-      trend: null,
+      trend: null as string | null,
       trendUp: false,
       pulse: dashboardStats.active_campaigns > 0,
     },
@@ -135,18 +147,20 @@ export function Dashboard() {
       label: 'Connection Rate',
       value: `${dashboardStats.connection_rate}%`,
       icon: Target,
-      trend: '+5%',
-      trendUp: true,
+      trend: null as string | null,
+      trendUp: false,
       isFormatted: true,
     },
     {
       label: 'Appointments Today',
       value: dashboardStats.appointments_today,
       icon: Calendar,
-      trend: '0%',
+      trend: null as string | null,
       trendUp: false,
     },
   ]
+
+  const hasActiveCallActivity = liveCalls.length > 0 || ringingCalls.length > 0
 
   return (
     <div className="relative">
@@ -163,9 +177,9 @@ export function Dashboard() {
           </h2>
           <p className="text-sm text-text-tertiary mt-1">
             {company?.name || 'CallPilot AI'}
-            <span className="mx-2">·</span>
+            <span className="mx-2">{' \u00b7 '}</span>
             <Badge variant="brand">Pro Plan</Badge>
-            <span className="mx-2">·</span>
+            <span className="mx-2">{' \u00b7 '}</span>
             {new Date().toLocaleDateString('en-IN', {
               weekday: 'long',
               day: 'numeric',
@@ -174,6 +188,28 @@ export function Dashboard() {
             })}
           </p>
         </motion.div>
+
+        {/* Onboarding prompt if no company set up */}
+        {!company && (
+          <motion.div variants={cardVariants}>
+            <Card>
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-4 py-2">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-brand-500/10 flex items-center justify-center">
+                    <Megaphone size={20} className="text-brand-400" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-text-primary">Set up your company to get started</p>
+                    <p className="text-xs text-text-tertiary mt-0.5">Configure your company details, upload scripts, and launch your first campaign.</p>
+                  </div>
+                </div>
+                <Button variant="primary" size="sm" onClick={() => navigate('/company')}>
+                  Set Up Company
+                </Button>
+              </div>
+            </Card>
+          </motion.div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -217,10 +253,12 @@ export function Dashboard() {
                 <CardHeader>
                   <div className="flex items-center gap-2">
                     <CardTitle>Live Now</CardTitle>
-                    <div className="flex items-center gap-1.5 text-xs text-success">
-                      <span className="w-1.5 h-1.5 bg-success rounded-full pulse-dot" />
-                      {activeCalls.length} active
-                    </div>
+                    {hasActiveCallActivity && (
+                      <div className="flex items-center gap-1.5 text-xs text-success">
+                        <span className="w-1.5 h-1.5 bg-success rounded-full pulse-dot" />
+                        {liveCalls.length + ringingCalls.length} active
+                      </div>
+                    )}
                   </div>
                   <button
                     onClick={() => navigate('/live')}
@@ -234,7 +272,25 @@ export function Dashboard() {
                   <div className="flex flex-col items-center py-8 text-center">
                     <Radio size={32} className="text-text-tertiary mb-3" />
                     <p className="text-sm text-text-secondary">No active calls</p>
-                    <p className="text-xs text-text-tertiary mt-1">Your AI is ready. Waiting for calls.</p>
+                    <p className="text-xs text-text-tertiary mt-1 max-w-xs">
+                      Launch a campaign to start seeing live call activity in real-time.
+                    </p>
+                    <div className="mt-4 flex items-center gap-3">
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={() => navigate('/campaigns/new')}
+                        icon={<Megaphone size={16} />}
+                      >
+                        Launch Campaign
+                      </Button>
+                      <button
+                        onClick={() => navigate('/campaigns')}
+                        className="text-xs text-brand-400 hover:text-brand-300 underline underline-offset-2"
+                      >
+                        View campaigns
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <div className="space-y-3 max-h-80 overflow-y-auto">
@@ -244,18 +300,32 @@ export function Dashboard() {
                         className="flex items-center justify-between p-3 rounded-lg bg-bg-surface border border-border-subtle"
                       >
                         <div className="flex items-center gap-3 min-w-0">
-                          <div className="w-8 h-8 rounded-full bg-brand-500/10 flex items-center justify-center flex-shrink-0">
+                          <div className="relative w-8 h-8 rounded-full bg-brand-500/10 flex items-center justify-center flex-shrink-0">
                             <Activity size={14} className="text-brand-400" />
+                            {(call.status === 'ringing' || call.status === 'in-progress') && (
+                              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-success rounded-full animate-ping" />
+                            )}
                           </div>
                           <div className="min-w-0">
                             <p className="text-sm text-text-primary truncate">
-                              {call.contact_name || maskPhone(call.contact_phone)}
+                              {call.contact_name || maskPhone(call.contact_phone) || 'Unknown'}
                             </p>
                             <div className="flex items-center gap-2 text-xs text-text-tertiary">
                               <span>{formatDuration(call.duration || 0)}</span>
-                              <span>·</span>
-                              <Badge variant={call.verification_status === 'verified' ? 'success' : 'default'} size="sm">
-                                {call.verification_status || 'Pending'}
+                              <span>{' \u00b7 '}</span>
+                              <Badge
+                                variant={
+                                  call.status === 'in-progress' || call.status === 'ringing'
+                                    ? 'success'
+                                    : call.status === 'completed'
+                                      ? 'brand'
+                                      : call.status === 'no-answer'
+                                        ? 'warning'
+                                        : 'default'
+                                }
+                                size="sm"
+                              >
+                                {call.status}
                               </Badge>
                             </div>
                           </div>
@@ -273,7 +343,6 @@ export function Dashboard() {
                               style={{ width: `${(call.sentiment_score || 0.5) * 100}%` }}
                             />
                           </div>
-                          <button className="text-xs text-brand-400 hover:text-brand-300">Intervene</button>
                         </div>
                       </div>
                     ))}
@@ -290,8 +359,8 @@ export function Dashboard() {
                 </CardHeader>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   {[
-                    { icon: Play, label: 'Launch Campaign', onClick: () => navigate('/campaigns/new'), color: 'text-success' },
-                    { icon: Upload, label: 'Import Contacts', onClick: () => navigate('/contacts/import'), color: 'text-brand-400' },
+                    { icon: Megaphone, label: 'Launch Campaign', onClick: () => navigate('/campaigns/new'), color: 'text-success' },
+                    { icon: Users, label: 'Import Customers', onClick: () => navigate('/customers/import'), color: 'text-brand-400' },
                     { icon: FileText, label: 'Upload PDF', onClick: () => navigate('/documents'), color: 'text-warning' },
                     { icon: BarChart2, label: 'View Analytics', onClick: () => navigate('/analytics'), color: 'text-info' },
                   ].map((action) => (
@@ -322,7 +391,7 @@ export function Dashboard() {
                     activityFeed.slice(0, 6).map((event, i) => (
                       <div
                         key={i}
-                        className="flex items-start gap-3 p-2 rounded-lg hover:bg-bg-surface transition-colors animate-slide-up"
+                        className="flex items-start gap-3 p-2 rounded-lg hover:bg-bg-surface transition-colors"
                         style={{ animationDelay: `${i * 50}ms` }}
                       >
                         <div className="w-8 h-8 rounded-full bg-bg-elevated flex items-center justify-center flex-shrink-0">
@@ -385,9 +454,15 @@ export function Dashboard() {
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-text-tertiary text-center py-4">
-                    No recent campaigns
-                  </p>
+                  <div className="text-center py-6">
+                    <p className="text-sm text-text-tertiary">No campaigns yet</p>
+                    <button
+                      onClick={() => navigate('/campaigns/new')}
+                      className="text-xs text-brand-400 hover:text-brand-300 underline underline-offset-2 mt-1"
+                    >
+                      Create your first campaign
+                    </button>
+                  </div>
                 )}
               </Card>
             </motion.div>

@@ -57,14 +57,14 @@ async def create_campaign(
 ):
     verify_company_ownership(data.company_id, user_id)
 
-    # Count contacts for this company
-    contacts = (
-        supabase.table("contacts")
+    # Count customers for this company
+    customers = (
+        supabase.table("customers")
         .select("id", count="exact")
         .eq("company_id", data.company_id)
         .execute()
     )
-    total_contacts = contacts.count if hasattr(contacts, "count") else 0
+    total_contacts = customers.count if hasattr(customers, "count") else 0
 
     campaign_data = {
         "company_id": data.company_id,

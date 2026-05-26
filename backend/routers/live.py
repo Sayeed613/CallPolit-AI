@@ -12,8 +12,21 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# WebSocket connections
+# ─── WebSocket broadcast state ────────────────────────────────
 _active_connections: set[WebSocket] = set()
+
+
+async def broadcast_event(event_type: str, data: dict):
+    """Broadcast a JSON event to all connected WebSocket clients."""
+    dead: list[WebSocket] = []
+    message = json.dumps({"type": event_type, "data": data})
+    for ws in _active_connections:
+        try:
+            await ws.send_text(message)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        _active_connections.discard(ws)
 
 
 @router.get("/calls")
@@ -87,27 +100,4 @@ async def live_websocket(websocket: WebSocket):
         _active_connections.discard(websocket)
 
 
-async def broadcast_call_update(call_data: dict):
-    """Broadcast a call update to all connected WebSocket clients."""
-    message = json.dumps({"type": "call_update", "data": call_data})
-    dead_connections = set()
-    for ws in _active_connections:
-        try:
-            await ws.send_text(message)
-        except Exception:
-            dead_connections.add(ws)
 
-    _active_connections.difference_update(dead_connections)
-
-
-async def broadcast_event(event_type: str, data: dict):
-    """Broadcast a generic event to all connected WebSocket clients."""
-    message = json.dumps({"type": event_type, "data": data})
-    dead_connections = set()
-    for ws in _active_connections:
-        try:
-            await ws.send_text(message)
-        except Exception:
-            dead_connections.add(ws)
-
-    _active_connections.difference_update(dead_connections)

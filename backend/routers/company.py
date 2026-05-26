@@ -86,7 +86,7 @@ async def delete_company(
     supabase.table("documents").delete().eq("company_id", company_id).execute()
     supabase.table("call_logs").delete().eq("company_id", company_id).execute()
     supabase.table("campaigns").delete().eq("company_id", company_id).execute()
-    supabase.table("contacts").delete().eq("company_id", company_id).execute()
+    supabase.table("customers").delete().eq("company_id", company_id).execute()
     supabase.table("companies").delete().eq("id", company_id).execute()
 
     return {"success": True}

@@ -9,16 +9,16 @@ import Input from '../components/ui/Input'
 import Select from '../components/ui/Select'
 import { SkeletonTable } from '../components/ui/Skeleton'
 import Modal from '../components/ui/Modal'
-import { contactsApi } from '../lib/api'
+import { customersApi } from '../lib/api'
 import { formatDate, maskPhone, maskEmail, getTimeAgo } from '../lib/utils'
 import useCompanyStore from '../stores/companyStore'
 import { useToast } from '../components/ui/Toast'
 
-export function ContactsTab() {
+export function CustomersTab() {
   const navigate = useNavigate()
   const { company } = useCompanyStore()
   const { addToast } = useToast()
-  const [contacts, setContacts] = useState<any[]>([])
+  const [customers, setCustomers] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -28,22 +28,22 @@ export function ContactsTab() {
 
   useEffect(() => {
     if (!company?.id) return
-    loadContacts()
+    loadCustomers()
   }, [company?.id])
 
-  const loadContacts = async () => {
+  const loadCustomers = async () => {
     if (!company?.id) return
     setLoading(true)
     try {
-      const data = await contactsApi.list(company.id)
-      setContacts(data.contacts || [])
+      const data = await customersApi.list(company.id)
+      setCustomers(data.customers || [])
     } catch {
       // fallback
     }
     setLoading(false)
   }
 
-  const filtered = contacts.filter((c) => {
+  const filtered = customers.filter((c) => {
     const matchesSearch =
       !search ||
       c.name?.toLowerCase().includes(search.toLowerCase()) ||
@@ -55,9 +55,9 @@ export function ContactsTab() {
 
   const handleDelete = async (id: string) => {
     try {
-      await contactsApi.delete(id)
-      setContacts((prev) => prev.filter((c) => c.id !== id))
-      addToast({ type: 'success', message: 'Contact deleted' })
+      await customersApi.delete(id)
+      setCustomers((prev) => prev.filter((c) => c.id !== id))
+      addToast({ type: 'success', message: 'Customer deleted' })
       setDeleteModal(null)
     } catch (err: any) {
       addToast({ type: 'error', message: err.message })
@@ -66,9 +66,9 @@ export function ContactsTab() {
 
   const handleUpdate = async (id: string, data: any) => {
     try {
-      await contactsApi.update(id, data)
-      setContacts((prev) => prev.map((c) => (c.id === id ? { ...c, ...data } : c)))
-      addToast({ type: 'success', message: 'Contact updated' })
+      await customersApi.update(id, data)
+      setCustomers((prev) => prev.map((c) => (c.id === id ? { ...c, ...data } : c)))
+      addToast({ type: 'success', message: 'Customer updated' })
       setEditModal(null)
     } catch (err: any) {
       addToast({ type: 'error', message: err.message })
@@ -95,15 +95,15 @@ export function ContactsTab() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-text-primary">Contacts</h2>
-          <p className="text-sm text-text-tertiary">{contacts.length} contacts</p>
+          <h2 className="text-lg font-semibold text-text-primary">Customers</h2>
+          <p className="text-sm text-text-tertiary">{customers.length} customers</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="secondary" onClick={() => navigate('/contacts/import')} icon={<Upload size={16} />}>
+          <Button variant="secondary" onClick={() => navigate('/customers/import')} icon={<Upload size={16} />}>
             Import
           </Button>
-          <Button onClick={() => navigate('/contacts/import')} icon={<Plus size={16} />}>
-            Add Contact
+          <Button onClick={() => navigate('/customers/import')} icon={<Plus size={16} />}>
+            Add Customer
           </Button>
         </div>
       </div>
@@ -114,7 +114,7 @@ export function ContactsTab() {
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary" />
           <input
             type="text"
-            placeholder="Search contacts..."
+            placeholder="Search customers..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full bg-bg-surface border border-border-default rounded-lg pl-9 pr-3 py-2 text-sm text-text-primary placeholder-text-disabled outline-none focus:border-brand-500/50 transition-colors"
@@ -162,19 +162,19 @@ export function ContactsTab() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((contact) => (
+                {filtered.map((customer) => (
                   <motion.tr
-                    key={contact.id}
+                    key={customer.id}
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     className="border-b border-border-subtle hover:bg-bg-surface transition-colors cursor-pointer"
-                    onClick={() => navigate(`/contacts/${contact.id}`)}
+                    onClick={() => navigate(`/customers/${customer.id}`)}
                   >
                     <td className="py-3 px-4" onClick={(e) => e.stopPropagation()}>
                       <input
                         type="checkbox"
-                        checked={selectedIds.has(contact.id)}
-                        onChange={() => toggleSelect(contact.id)}
+                        checked={selectedIds.has(customer.id)}
+                        onChange={() => toggleSelect(customer.id)}
                         className="rounded border-border-default accent-brand-500"
                       />
                     </td>
@@ -182,42 +182,42 @@ export function ContactsTab() {
                       <div className="flex items-center gap-2">
                         <div className="w-7 h-7 rounded-full bg-brand-500/10 flex items-center justify-center flex-shrink-0">
                           <span className="text-xs font-medium text-brand-400">
-                            {contact.name?.[0] || '?'}
+                            {customer.name?.[0] || '?'}
                           </span>
                         </div>
                         <div>
-                          <p className="text-text-primary font-medium">{contact.name || 'Unknown'}</p>
-                          {contact.is_vip && <Badge variant="warning" size="sm">VIP</Badge>}
+                          <p className="text-text-primary font-medium">{customer.name || 'Unknown'}</p>
+                          {customer.is_vip && <Badge variant="warning" size="sm">VIP</Badge>}
                         </div>
                       </div>
                     </td>
                     <td className="py-3 px-4 text-text-secondary font-mono text-xs">
-                      {maskPhone(contact.phone)}
+                      {maskPhone(customer.phone)}
                     </td>
                     <td className="py-3 px-4 text-text-secondary text-xs hidden md:table-cell">
-                      {maskEmail(contact.email || '-')}
+                      {maskEmail(customer.email || '-')}
                     </td>
                     <td className="py-3 px-4">
                       <Badge
                         size="sm"
-                        variant={contact.status === 'active' ? 'success' : contact.status === 'vip' ? 'warning' : 'default'}
+                        variant={customer.status === 'active' ? 'success' : customer.status === 'vip' ? 'warning' : 'default'}
                       >
-                        {contact.status}
+                        {customer.status}
                       </Badge>
                     </td>
                     <td className="py-3 px-4 text-text-tertiary text-xs hidden lg:table-cell">
-                      {contact.last_called ? getTimeAgo(contact.last_called) : 'Never'}
+                      {customer.last_called ? getTimeAgo(customer.last_called) : 'Never'}
                     </td>
                     <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1">
                         <button
-                          onClick={() => setEditModal(contact)}
+                          onClick={() => setEditModal(customer)}
                           className="p-1.5 text-text-tertiary hover:text-text-primary rounded-md hover:bg-bg-elevated transition-colors"
                         >
                           <Edit3 size={14} />
                         </button>
                         <button
-                          onClick={() => setDeleteModal(contact.id)}
+                          onClick={() => setDeleteModal(customer.id)}
                           className="p-1.5 text-text-tertiary hover:text-error rounded-md hover:bg-error/5 transition-colors"
                         >
                           <Trash2 size={14} />
@@ -229,7 +229,7 @@ export function ContactsTab() {
                 {filtered.length === 0 && (
                   <tr>
                     <td colSpan={7} className="py-12 text-center text-text-tertiary">
-                      No contacts found
+                      No customers found
                     </td>
                   </tr>
                 )}
@@ -255,7 +255,7 @@ export function ContactsTab() {
       )}
 
       {/* Edit Modal */}
-      <Modal open={!!editModal} onClose={() => setEditModal(null)} title="Edit Contact" maxWidth="sm">
+      <Modal open={!!editModal} onClose={() => setEditModal(null)} title="Edit Customer" maxWidth="sm">
         {editModal && (
           <form
             onSubmit={(e) => {
@@ -293,10 +293,10 @@ export function ContactsTab() {
       </Modal>
 
       {/* Delete Modal */}
-      <Modal open={!!deleteModal} onClose={() => setDeleteModal(null)} title="Delete Contact" maxWidth="sm">
+      <Modal open={!!deleteModal} onClose={() => setDeleteModal(null)} title="Delete Customer" maxWidth="sm">
         <div className="space-y-4">
           <p className="text-sm text-text-secondary">
-            Are you sure you want to delete this contact? This action cannot be undone.
+            Are you sure you want to delete this customer? This action cannot be undone.
           </p>
           <div className="flex gap-3">
             <Button variant="secondary" className="flex-1" onClick={() => setDeleteModal(null)}>
@@ -312,4 +312,4 @@ export function ContactsTab() {
   )
 }
 
-export default ContactsTab
+export default CustomersTab

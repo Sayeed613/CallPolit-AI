@@ -13,8 +13,10 @@ class WebSocketManager {
   connect(url: string) {
     this.url = url
     this.shouldReconnect = true
-    this.reconnectAttempts = 0
-    this._connect()
+    if (!this.ws || this.ws.readyState === WebSocket.CLOSED || this.ws.readyState === WebSocket.CLOSING) {
+      this.reconnectAttempts = 0
+      this._connect()
+    }
   }
 
   private _connect() {

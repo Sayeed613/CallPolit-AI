@@ -57,20 +57,8 @@ const useAuthStore = create<AuthState>((set, get) => ({
       set({ user: data.user, session: data.session, loading: false })
     } catch (err: unknown) {
       const error = err as any
-      const message = error?.message || ''
-
-      // Map auth errors to user-friendly messages
-      if (message.includes('Invalid login credentials')) {
-        set({ error: 'Invalid email or password. Please try again.', loading: false })
-      } else if (message.includes('Email not confirmed')) {
-        set({ error: 'Please confirm your email before signing in. Check your inbox.', loading: false })
-      } else if (error?.status === 429 || error?.code === '429' || message.includes('rate_limit') || message.includes('rate limit')) {
-        set({ error: 'Too many attempts. Please wait a moment and try again.', loading: false })
-      } else if (error?.status === 400 || error?.code === '400') {
-        set({ error: 'Invalid credentials or account issue. Please check your details.', loading: false })
-      } else {
-        set({ error: message || 'Failed to sign in. Please try again.', loading: false })
-      }
+      const message = error?.message || 'Failed to sign in. Please try again.'
+      set({ error: message, loading: false })
     }
   },
 
@@ -106,7 +94,7 @@ const useAuthStore = create<AuthState>((set, get) => ({
       const error = err as any
       const status = error?.status
       const code = error?.code
-      const message = error?.message || ''
+      const message = error?.message || 'Failed to sign up'
 
       // Rate limit detection — check status (number) and code (string) separately
       if (
@@ -118,7 +106,7 @@ const useAuthStore = create<AuthState>((set, get) => ({
         message.includes('rate limit')
       ) {
         set({
-          error: 'Too many signups from this device. Please wait 60 seconds and try again, or use a different email.',
+          error: message,
           rateLimited: true,
           rateLimitCountdown: 60,
           loading: false,
@@ -144,7 +132,7 @@ const useAuthStore = create<AuthState>((set, get) => ({
 
         set({ rateLimitTimer: timer })
       } else {
-        set({ error: message || 'Failed to sign up', loading: false })
+        set({ error: message, loading: false })
       }
     }
   },

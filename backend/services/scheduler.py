@@ -17,6 +17,8 @@ _paused_campaigns: set[str] = set()
 async def run_campaign(campaign_id: str, company_id: str):
     """Run a campaign by processing contacts at the configured rate."""
     try:
+        # Deferred import to avoid circular dependency (live.py imports from scheduler)
+        from routers.live import broadcast_event
         campaign = (
             supabase.table("campaigns")
             .select("*")
@@ -32,15 +34,15 @@ async def run_campaign(campaign_id: str, company_id: str):
         calls_per_minute = data.get("calls_per_minute", 5)
         delay_between_calls = 60.0 / calls_per_minute
 
-        contacts = (
-            supabase.table("contacts")
+        customers = (
+            supabase.table("customers")
             .select("*")
             .eq("company_id", company_id)
             .execute()
         )
 
-        contact_list = contacts.data if contacts.data else []
-        total = len(contact_list)
+        customer_list = customers.data if customers.data else []
+        total = len(customer_list)
 
         supabase.table("campaigns").update({
             "total_contacts": total,
@@ -48,7 +50,7 @@ async def run_campaign(campaign_id: str, company_id: str):
             "launched_at": datetime.utcnow().isoformat(),
         }).eq("id", campaign_id).execute()
 
-        for idx, contact in enumerate(contact_list):
+        for idx, customer in enumerate(customer_list):
             if _paused_campaigns.isdisjoint({campaign_id}):
                 if campaign_id not in _active_tasks:
                     break
@@ -63,26 +65,42 @@ async def run_campaign(campaign_id: str, company_id: str):
                 )
                 twilio_phone = company.data.get("twilio_phone_number", "") if company.data else ""
 
+                # Determine which phone number to use
+                from_number = twilio_phone or settings.TWILIO_PHONE_NUMBER or ""
+
                 # Check if Twilio is actually configured before calling
-                if not twilio_phone and not settings.TWILIO_PHONE_NUMBER:
-                    logger.error(f"Campaign {campaign_id}: No Twilio phone number configured. Stopping campaign.")
-                    supabase.table("campaigns").update({
-                        "status": "draft",
-                    }).eq("id", campaign_id).execute()
-                    break
+                if not from_number:
+                    logger.warning(f"Campaign {campaign_id}: No Twilio phone number configured yet. Checking if PVT number available...")
+                    # Try Plivo as fallback
+                    if not settings.PLIVO_PHONE_NUMBER:
+                        logger.error(f"Campaign {campaign_id}: No phone number configured (Twilio or Plivo). Stopping campaign.")
+                        supabase.table("campaigns").update({
+                            "status": "draft",
+                        }).eq("id", campaign_id).execute()
+                        break
+                    from_number = settings.PLIVO_PHONE_NUMBER
 
                 success = await initiate_call(
-                    to_phone=contact["phone"],
-                    from_phone=twilio_phone,
+                    to_phone=customer["phone"],
+                    from_phone=from_number,
                     company_id=company_id,
                     campaign_id=campaign_id,
-                    contact_id=contact["id"],
-                    contact_name=contact.get("name", ""),
+                    contact_id=customer["id"],
+                    contact_name=customer.get("name", ""),
                 )
 
                 if not success:
-                    logger.warning(f"Campaign {campaign_id}: Call to {contact['phone']} failed")
+                    logger.warning(f"Campaign {campaign_id}: Call to {customer['phone']} failed")
                     # Still increment but don't stop the campaign for a single failure
+
+                # Broadcast campaign progress event
+                await broadcast_event("campaign_progress", {
+                    "campaign_id": campaign_id,
+                    "processed": idx + 1,
+                    "total": total,
+                    "customer_name": customer.get("name", ""),
+                    "customer_phone": customer["phone"],
+                })
 
                 await asyncio.sleep(delay_between_calls)
             else:

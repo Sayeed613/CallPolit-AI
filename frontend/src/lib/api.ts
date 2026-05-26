@@ -120,24 +120,24 @@ export const companyApi = {
     request<any>(`/company/delete/${companyId}`, { method: 'DELETE' }),
 }
 
-// Contacts
-export const contactsApi = {
-  list: (companyId: string) => request<{ contacts: any[]; count: number }>(`/contacts/list/${companyId}`),
-  get: (contactId: string) => request<any>(`/contacts/get/${contactId}`),
-  update: (contactId: string, data: Record<string, any>) =>
-    request<any>(`/contacts/update/${contactId}`, {
+// Customers
+export const customersApi = {
+  list: (companyId: string) => request<{ customers: any[]; count: number }>(`/customers/list/${companyId}`),
+  get: (customerId: string) => request<any>(`/customers/get/${customerId}`),
+  update: (customerId: string, data: Record<string, any>) =>
+    request<any>(`/customers/update/${customerId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
-  delete: (contactId: string) =>
-    request<any>(`/contacts/delete/${contactId}`, { method: 'DELETE' }),
+  delete: (customerId: string) =>
+    request<any>(`/customers/delete/${customerId}`, { method: 'DELETE' }),
   import: (companyId: string, file: File) => {
     const formData = new FormData()
     formData.append('file', file)
-    return request<any>(`/contacts/import/${companyId}`, {
+    return request<any>(`/customers/import/${companyId}`, {
       method: 'POST',
       body: formData,
-      headers: {}, // Let browser set content-type for FormData
+      headers: {},
     })
   },
 }

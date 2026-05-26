@@ -11,6 +11,7 @@ from services.rag_service import retrieve_relevant_chunks, build_context, detect
 from services.twilio_service import build_voice_twiml, build_gather_twiml, end_call_twiml
 from services.verification_service import generate_otp
 from services.redis_client import get_call_state, set_call_state, delete_call_state
+from routers.live import broadcast_event
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +59,9 @@ async def outbound_call_webhook(
     industry = company.data.get("industry", "service") if company.data else "service"
     language = company.data.get("language_preference", ["hindi"])[0] if company.data else "hindi"
 
-    # Get contact info
-    contact = supabase.table("contacts").select("*").eq("id", contact_id).single().execute()
-    contact_language = contact.data.get("language", "hindi") if contact.data else "hindi"
+    # Get customer info
+    customer = supabase.table("customers").select("*").eq("id", contact_id).single().execute()
+    contact_language = customer.data.get("language", "hindi") if customer.data else "hindi"
     state["contact_language"] = contact_language
 
     # Get RAG context
@@ -100,6 +101,21 @@ async def outbound_call_webhook(
     state["transcript"].append({"role": "assistant", "content": greeting})
     await set_call_state(call_sid, state)
 
+    # Broadcast call_state event
+    try:
+        await broadcast_event("call_state", {
+            "call_sid": call_sid,
+            "campaign_id": campaign_id,
+            "company_id": company_id,
+            "contact_id": contact_id,
+            "contact_name": contact_name,
+            "contact_phone": customer.data.get("phone", "") if customer.data else "",
+            "status": "in-progress",
+            "direction": "outbound",
+        })
+    except Exception:
+        pass
+
     return PlainTextResponse(str(twiml), media_type="text/xml")
 
 
@@ -124,6 +140,22 @@ async def gather_webhook(request: Request):
     # Detect sentiment
     sentiment = detect_sentiment(speech_result)
     state["sentiment_history"].append(sentiment)
+
+    # Broadcast transcript event
+    try:
+        await broadcast_event("transcript", {
+            "call_sid": call_sid,
+            "campaign_id": state.get("campaign_id", ""),
+            "company_id": state.get("company_id", ""),
+            "contact_id": state.get("contact_id", ""),
+            "contact_name": state.get("contact_name", ""),
+            "role": "customer",
+            "text": speech_result,
+            "turn_count": state["turn_count"],
+            "sentiment_score": sentiment,
+        })
+    except Exception:
+        pass
 
     # Check for escalation
     if detect_escalation(speech_result):
@@ -157,6 +189,22 @@ async def gather_webhook(request: Request):
         ai_response = "Thank you for sharing that information. Is there anything else you would like to discuss?"
 
     state["transcript"].append({"role": "assistant", "content": ai_response})
+
+    # Broadcast transcript event
+    try:
+        await broadcast_event("transcript", {
+            "call_sid": call_sid,
+            "campaign_id": state.get("campaign_id", ""),
+            "company_id": state.get("company_id", ""),
+            "contact_id": state.get("contact_id", ""),
+            "contact_name": state.get("contact_name", ""),
+            "role": "ai",
+            "text": ai_response,
+            "turn_count": state["turn_count"],
+            "sentiment_score": sum(state["sentiment_history"]) / len(state["sentiment_history"]) if state["sentiment_history"] else 0.5,
+        })
+    except Exception:
+        pass
 
     # Check if call should end
     if state["turn_count"] >= 20:
@@ -213,9 +261,9 @@ async def call_status_webhook(request: Request):
             if summary:
                 supabase.table("call_logs").update({"notes": summary}).eq("twilio_call_sid", call_sid).execute()
 
-        # Update last_called on contact
+        # Update last_called on customer
         if contact_id:
-            supabase.table("contacts").update({
+            supabase.table("customers").update({
                 "last_called": datetime.utcnow().isoformat(),
                 "verified": True,
             }).eq("id", contact_id).execute()
@@ -235,6 +283,21 @@ async def call_status_webhook(request: Request):
                 increment_campaign_counter(campaign_id, "unreachable")
 
         check_campaign_completion(campaign_id)
+
+    # Broadcast final call_state
+    try:
+        await broadcast_event("call_state", {
+            "call_sid": call_sid,
+            "campaign_id": campaign_id or "",
+            "company_id": company_id or "",
+            "contact_id": contact_id or "",
+            "contact_phone": "",
+            "status": call_status,
+            "duration": call_duration,
+            "final": True,
+        })
+    except Exception:
+        pass
 
     # Cleanup state
     await delete_call_state(call_sid)

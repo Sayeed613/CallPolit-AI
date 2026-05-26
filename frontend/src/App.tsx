@@ -15,14 +15,15 @@ const LiveDashboard = lazy(() => import('./pages/live/LiveDashboard'))
 const CampaignsTab = lazy(() => import('./pages/CampaignsTab'))
 const CampaignDetail = lazy(() => import('./pages/campaigns/CampaignDetail'))
 const NewCampaign = lazy(() => import('./pages/NewCampaign'))
-const ContactsTab = lazy(() => import('./pages/ContactsTab'))
-const ContactDetail = lazy(() => import('./pages/ContactDetail'))
-const ImportContacts = lazy(() => import('./pages/ImportContacts'))
+const CustomersTab = lazy(() => import('./pages/CustomersTab'))
+const CustomerDetail = lazy(() => import('./pages/CustomerDetail'))
+const ImportCustomers = lazy(() => import('./pages/ImportCustomers'))
 const AnalyticsTab = lazy(() => import('./pages/AnalyticsTab'))
 const DocumentsTab = lazy(() => import('./pages/DocumentsTab'))
 const AppointmentsTab = lazy(() => import('./pages/AppointmentsTab'))
 const CompanyPage = lazy(() => import('./pages/CompanyPage'))
 const Settings = lazy(() => import('./pages/settings/Settings'))
+
 
 function LoadingFallback() {
   return (
@@ -95,9 +96,9 @@ function AppContent() {
           <Route path="/campaigns" element={<ProtectedRoute><PageWrapper><CampaignsTab /></PageWrapper></ProtectedRoute>} />
           <Route path="/campaigns/new" element={<ProtectedRoute><PageWrapper><NewCampaign /></PageWrapper></ProtectedRoute>} />
           <Route path="/campaigns/:id" element={<ProtectedRoute><PageWrapper><CampaignDetail /></PageWrapper></ProtectedRoute>} />
-          <Route path="/contacts" element={<ProtectedRoute><PageWrapper><ContactsTab /></PageWrapper></ProtectedRoute>} />
-          <Route path="/contacts/import" element={<ProtectedRoute><PageWrapper><ImportContacts /></PageWrapper></ProtectedRoute>} />
-          <Route path="/contacts/:id" element={<ProtectedRoute><PageWrapper><ContactDetail /></PageWrapper></ProtectedRoute>} />
+          <Route path="/customers" element={<ProtectedRoute><PageWrapper><CustomersTab /></PageWrapper></ProtectedRoute>} />
+          <Route path="/customers/import" element={<ProtectedRoute><PageWrapper><ImportCustomers /></PageWrapper></ProtectedRoute>} />
+          <Route path="/customers/:id" element={<ProtectedRoute><PageWrapper><CustomerDetail /></PageWrapper></ProtectedRoute>} />
           <Route path="/analytics" element={<ProtectedRoute><PageWrapper><AnalyticsTab /></PageWrapper></ProtectedRoute>} />
           <Route path="/documents" element={<ProtectedRoute><PageWrapper><DocumentsTab /></PageWrapper></ProtectedRoute>} />
           <Route path="/appointments" element={<ProtectedRoute><PageWrapper><AppointmentsTab /></PageWrapper></ProtectedRoute>} />
